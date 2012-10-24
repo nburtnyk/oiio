@@ -1164,6 +1164,9 @@ DLLPUBLIC std::string encode_xmp (const ImageSpec &spec, bool minimal=false);
 // to force correct linkage on some systems
 DLLPUBLIC void _ImageIO_force_link ();
 
+// Redshift
+DLLPUBLIC int shutdown_exr_threads ();
+
 }
 OIIO_NAMESPACE_EXIT
 
