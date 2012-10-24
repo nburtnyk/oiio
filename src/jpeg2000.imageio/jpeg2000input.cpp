@@ -159,7 +159,12 @@ Jpeg2000Input::open (const std::string &p_name, ImageSpec &p_spec)
         return false;
     }
 
-    setup_event_mgr(decompressor);
+    //setup_event_mgr(decompressor);
+	opj_event_mgr_t event_mgr;
+	event_mgr.error_handler = openjpeg_dummy_callback;
+	event_mgr.warning_handler = openjpeg_dummy_callback;
+	event_mgr.info_handler = openjpeg_dummy_callback;
+	opj_set_event_mgr((opj_common_ptr)decompressor, &event_mgr, NULL);
 
     opj_dparameters_t parameters;
     opj_set_default_decoder_parameters(&parameters);
