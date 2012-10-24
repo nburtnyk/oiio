@@ -85,6 +85,7 @@
 #if defined(_MSC_VER) && !USE_TBB
 #  include <windows.h>
 #  include <winbase.h>
+#  include <intrin.h>
 #  pragma intrinsic (_InterlockedExchangeAdd)
 #  pragma intrinsic (_InterlockedCompareExchange)
 #  pragma intrinsic (_InterlockedCompareExchange64)
