@@ -1,12 +1,16 @@
 ###########################################################################
 # Figure out what platform we're on, and set some variables appropriately
 
-message (STATUS "CMAKE_SYSTEM_NAME = ${CMAKE_SYSTEM_NAME}")
-message (STATUS "CMAKE_SYSTEM_VERSION = ${CMAKE_SYSTEM_VERSION}")
-message (STATUS "CMAKE_SYSTEM_PROCESSOR = ${CMAKE_SYSTEM_PROCESSOR}")
+if (VERBOSE)
+    message (STATUS "CMAKE_SYSTEM_NAME = ${CMAKE_SYSTEM_NAME}")
+    message (STATUS "CMAKE_SYSTEM_VERSION = ${CMAKE_SYSTEM_VERSION}")
+    message (STATUS "CMAKE_SYSTEM_PROCESSOR = ${CMAKE_SYSTEM_PROCESSOR}")
+endif ()
 
 if (UNIX)
-    message (STATUS "Unix! ${CMAKE_SYSTEM_NAME}")
+    if (VERBOSE)
+        message (STATUS "Unix! ${CMAKE_SYSTEM_NAME}")
+    endif ()
     if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
         set (platform "linux")
         set (CXXFLAGS "${CXXFLAGS} -DLINUX")
@@ -15,18 +19,23 @@ if (UNIX)
             set (CXXFLAGS "${CXXFLAGS} -DLINUX64")
         endif ()
     elseif (APPLE)
-        message (STATUS "Apple!")
         set (platform "macosx")
     elseif (${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
         set (platform "FreeBSD")
         set (CXXFLAGS "${CXXFLAGS} -DFREEBSD")
+        if (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "i386")
+            if (NOT USE_TBB)
+                # to use gcc atomics we need cpu instructions only available
+                # with arch of i586 or higher
+                set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=i586")
+            endif()
+        endif()
     else ()
         string (TOLOWER ${CMAKE_SYSTEM_NAME} platform)
     endif ()
 endif ()
 
 if (WIN32)
-    message (STATUS "Windows!")
     set (platform "windows")
 endif ()
 
