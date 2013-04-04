@@ -39,10 +39,11 @@
 #include <sstream>
 #include <utility>
 #include <ctype.h>
+#include <map>
 
 #include <boost/tokenizer.hpp>
 #include <boost/foreach.hpp>
-#include <boost/filesystem.hpp>
+#include <boost/regex.hpp>
 
 #include "argparse.h"
 #include "imageio.h"
@@ -61,6 +62,51 @@ using namespace ImageBufAlgo;
 
 
 static Oiiotool ot;
+
+
+
+Oiiotool::Oiiotool ()
+    : imagecache(NULL),
+      return_value (EXIT_SUCCESS)
+{
+    clear_options ();
+}
+
+
+
+void
+Oiiotool::clear_options ()
+{
+    verbose = false;
+    noclobber = false;
+    allsubimages = false;
+    printinfo = false;
+    printstats = false;
+    hash = false;
+    updatemode = false;
+    threads = 0;
+    full_command_line.clear ();
+    printinfo_metamatch.clear ();
+    printinfo_nometamatch.clear ();
+    output_dataformat = TypeDesc::UNKNOWN;
+    output_bitspersample = 0;
+    output_scanline = false;
+    output_tilewidth = 0;
+    output_tileheight = 0;
+    output_compression = "";
+    output_quality = -1;
+    output_planarconfig = "default";
+    output_adjust_time = false;
+    output_autocrop = true;
+    diff_warnthresh = 1.0e-6f;
+    diff_warnpercent = 0;
+    diff_hardwarn = std::numeric_limits<float>::max();
+    diff_failthresh = 1.0e-6f;
+    diff_failpercent = 0;
+    diff_hardfail = std::numeric_limits<float>::max();
+    m_pending_callback = NULL;
+    m_pending_argc = 0;
+}
 
 
 
@@ -165,6 +211,29 @@ Oiiotool::error (const std::string &command, const std::string &explanation)
         std::cerr << " (" << explanation << ")";
     std::cerr << "\n";
     exit (-1);
+}
+
+
+
+static int
+extract_options (std::map<std::string,std::string> &options,
+                 std::string command)
+{
+    // std::cout << "extract_options '" << command << "'\n";
+    int noptions = 0;
+    size_t pos;
+    while ((pos = command.find_first_of(":")) != std::string::npos) {
+        command = command.substr (pos+1, std::string::npos);
+        size_t e = command.find_first_of("=");
+        if (e != std::string::npos) {
+            std::string name = command.substr(0,e);
+            std::string value = command.substr(e+1,command.find_first_of(":")-(e+1));
+            options[name] = value;
+            ++noptions;
+            // std::cout << "'" << name << "' -> '" << value << "'\n";
+        }
+    }
+    return noptions;
 }
 
 
@@ -893,6 +962,46 @@ action_unmip (int argc, const char *argv[])
 
 
 
+static int
+set_channelnames (int argc, const char *argv[])
+{
+    if (ot.postpone_callback (1, set_channelnames, argc, argv))
+        return 0;
+    ImageRecRef A = ot.curimg;
+    ot.read (A);
+
+    std::vector<std::string> newchannelnames;
+    Strutil::split (argv[1], newchannelnames, ",");
+
+    for (int s = 0; s < A->subimages(); ++s) {
+        int miplevels = A->miplevels(s);
+        for (int m = 0;  m < miplevels;  ++m) {
+            ImageSpec *spec = A->spec(s,m);
+            spec->channelnames.resize (spec->nchannels);
+            for (int c = 0; c < spec->nchannels;  ++c) {
+                if (c < (int)newchannelnames.size() &&
+                      newchannelnames[c].size()) {
+                    std::string name = newchannelnames[c];
+                    spec->channelnames[c] = name;
+                    if (Strutil::iequals(name,"A") ||
+                        Strutil::iends_with(name,".A") ||
+                        Strutil::iequals(name,"Alpha") ||
+                        Strutil::iends_with(name,".Alpha"))
+                        spec->alpha_channel = c;
+                    if (Strutil::iequals(name,"Z") ||
+                        Strutil::iends_with(name,".Z") ||
+                        Strutil::iequals(name,"Depth") ||
+                        Strutil::iends_with(name,".Depth"))
+                        spec->z_channel = c;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+
+
 // For a given spec (which contains the channel names for an image), and
 // a comma separated list of channels (e.g., "B,G,R,A"), compute the
 // vector of integer indices for those channels (e.g., {2,1,0,3}).
@@ -1016,6 +1125,45 @@ action_channels (int argc, const char *argv[])
         }
     }
 
+    return 0;
+}
+
+
+
+static int
+action_chappend (int argc, const char *argv[])
+{
+    if (ot.postpone_callback (2, action_chappend, argc, argv))
+        return 0;
+
+    ImageRecRef B (ot.pop());
+    ImageRecRef A (ot.pop());
+    ot.read (A);
+    ot.read (B);
+
+    std::vector<int> allmiplevels;
+    for (int s = 0, subimages = ot.allsubimages ? A->subimages() : 1;
+         s < subimages;  ++s) {
+        int miplevels = ot.allsubimages ? A->miplevels(s) : 1;
+        allmiplevels.push_back (miplevels);
+    }
+
+    // Create the replacement ImageRec
+    ImageRecRef R (new ImageRec(A->name(), (int)allmiplevels.size(),
+                                &allmiplevels[0]));
+    ot.push (R);
+
+    // Subimage by subimage, MIP level by MIP level, channel_append the
+    // two images.
+    for (int s = 0, subimages = R->subimages();  s < subimages;  ++s) {
+        for (int m = 0, miplevels = R->miplevels(s);  m < miplevels;  ++m) {
+            // Shuffle the indexed/named channels
+            ImageBufAlgo::channel_append ((*R)(s,m), (*A)(s,m), (*B)(s,m));
+            // Tricky subtlety: IBA::channels changed the underlying IB,
+            // we may need to update the IRR's copy of the spec.
+            R->update_spec_from_imagebuf(s,m);
+        }
+    }
     return 0;
 }
 
@@ -1590,25 +1738,33 @@ action_resize (int argc, const char *argv[])
     newspec.full_height = newspec.height;
 
     ot.push (new ImageRec (A->name(), newspec, ot.imagecache));
+
+    // Resize ratio
+    float wratio = float(newspec.full_width) / float(Aspec.full_width);
+    float hratio = float(newspec.full_height) / float(Aspec.full_height);
+
+    if (filtername.empty()) {
+        // No filter name supplied -- pick a good default
+        if (wratio > 1.0f || hratio > 1.0f)
+            filtername = "blackman-harris";
+        else
+            filtername = "lanczos3";
+    }
     Filter2D *filter = NULL;
-    if (! filtername.empty()) {
-        // If there's a matching filter, use it (and its recommended width)
-        for (int i = 0, e = Filter2D::num_filters();  i < e;  ++i) {
-            FilterDesc fd;
-            Filter2D::get_filterdesc (i, &fd);
-            if (fd.name == filtername) {
-                filter = Filter2D::create (filtername, fd.width, fd.width);
-                break;
-            }
+    for (int i = 0, e = Filter2D::num_filters();  i < e;  ++i) {
+        FilterDesc fd;
+        Filter2D::get_filterdesc (i, &fd);
+        if (fd.name == filtername) {
+            float w = fd.width * std::max (1.0f, wratio);
+            float h = fd.width * std::max (1.0f, hratio);
+            filter = Filter2D::create (filtername, w, h);
+            break;
         }
-        if (!filter)
-            std::cout << "Filter \"" << filtername << "\" not recognized\n";
-    } else  if (newspec.width > Aspec.width && newspec.height > Aspec.height) {
-        // default maximizing filter: blackman-harris 3x3
-        filter = Filter2D::create ("blackman-harris", 3.0f, 3.0f);
-    } else if (newspec.width < Aspec.width && newspec.height < Aspec.height) {
-        // defualt minimizing filter: lanczos 3 lobe 6x6
-        filter = Filter2D::create ("lanczos3", 6.0f, 6.0f);
+    }
+    if (! filter) {
+        ot.error (argv[0], Strutil::format("Filter \"%s\" not recognized",
+                                           filtername));
+        return false;
     }
 
     if (ot.verbose) {
@@ -1653,19 +1809,31 @@ action_fit (int argc, const char *argv[])
     adjust_geometry (fit_full_width, fit_full_height, fit_full_x, fit_full_y,
                      argv[1], false);
 
+    std::map<std::string,std::string> options;
+    extract_options (options, argv[0]);
+    std::string padopt = options["pad"];
+    bool pad = padopt.size() && atoi(padopt.c_str());
+    std::string filtername = options["filter"];
+    
     // Compute scaling factors and use action_resize to do the heavy lifting
-    float wfactor = float(fit_full_width) / Aspec->full_width;
-    float hfactor = float(fit_full_height) / Aspec->full_height;
+    float oldaspect = float(Aspec->full_width) / Aspec->full_height;
+    float newaspect = float(fit_full_width) / fit_full_height;
     int resize_full_width = fit_full_width;
     int resize_full_height = fit_full_height;
-    if (wfactor <= hfactor)
-        resize_full_height = int(Aspec->full_height * wfactor);
-    else
-        resize_full_width = int(Aspec->full_width * hfactor);
+    int xoffset = 0, yoffset = 0;
+
+    if (newaspect >= oldaspect) {  // same or wider than original
+        resize_full_width = int(resize_full_height * oldaspect + 0.5f);
+        xoffset = (fit_full_width - resize_full_width) / 2;
+    } else {  // narrower than original
+        resize_full_height = int(resize_full_width / oldaspect + 0.5f);
+        yoffset = (fit_full_height - resize_full_height) / 2;
+    }
+
     if (ot.verbose) {
         std::cout << "Fitting " 
                   << format_resolution(Aspec->full_width, Aspec->full_height,
-                                       Aspec->x, Aspec->y)
+                                       Aspec->full_x, Aspec->full_y)
                   << " into "
                   << format_resolution(fit_full_width, fit_full_height,
                                        fit_full_x, fit_full_y) 
@@ -1679,16 +1847,23 @@ action_fit (int argc, const char *argv[])
         fit_full_x != Aspec->full_x || fit_full_y != Aspec->full_y) {
         std::string resize = format_resolution (resize_full_width,
                                                 resize_full_height,
-                                                fit_full_x, fit_full_y);
-        const char *newargv[2] = { "resize", resize.c_str() };
+                                                0, 0);
+        std::string command = "resize";
+        if (filtername.size())
+            command += Strutil::format (":filter=%s", filtername);
+        const char *newargv[2] = { command.c_str(), resize.c_str() };
         action_resize (2, newargv);
         A = ot.top ();
         Aspec = A->spec(0,0);
+        A->spec(0,0)->full_width = fit_full_width;
+        A->spec(0,0)->full_height = fit_full_height;
+        A->spec(0,0)->x = xoffset;
+        A->spec(0,0)->y = yoffset;
         // Now A,Aspec are for the NEW resized top of stack
     }
 
-    if (fit_full_width != resize_full_width ||
-        fit_full_height != Aspec->full_height) {
+    if (pad && (fit_full_width != Aspec->width ||
+                fit_full_height != Aspec->height)) {
         // Needs padding
         ImageSpec newspec = *Aspec;
         newspec.width = newspec.full_width = fit_full_width;
@@ -1707,7 +1882,7 @@ action_fit (int argc, const char *argv[])
             ImageBufAlgo::paste (Rib, (fit_full_width-Aspec->full_height)/2, 0,
                                  0, 0, (*A)(0,0));
     }
-    
+
     return 0;
 }
 
@@ -2044,6 +2219,8 @@ getargs (int argc, char *argv[])
                 "--no-clobber", &ot.noclobber, "Do not overwrite existing files",
                 "--noclobber", &ot.noclobber, "", // synonym
                 "--threads %@ %d", set_threads, &ot.threads, "Number of threads (default 0 == #cores)",
+                "--frames %s", NULL, "Frame range for '#' wildcards",
+                "--framepadding %d", NULL, "Frame number padding digits",
                 "<SEPARATOR>", "Commands that write images:",
                 "-o %@ %s", output_file, NULL, "Output the current image to the named file",
                 "<SEPARATOR>", "Options that affect subsequent image output:",
@@ -2075,6 +2252,8 @@ getargs (int argc, char *argv[])
                     "Set the pixel data window origin (e.g. +20+10)",
                 "--fullsize %@ %s", set_fullsize, NULL, "Set the display window (e.g., 1920x1080, 1024x768+100+0, -20-30)",
                 "--fullpixels %@", set_full_to_pixels, NULL, "Set the 'full' image range to be the pixel data window",
+                "--chnames %@ %s", set_channelnames, NULL,
+                    "Set the channel names (comma-separated)",
                 "<SEPARATOR>", "Options that affect subsequent actions:",
                 "--fail %g", &ot.diff_failthresh, "Failure threshold difference (0.000001)",
                 "--failpercent %g", &ot.diff_failpercent, "Allow this percentage of failures in diff (0)",
@@ -2103,7 +2282,7 @@ getargs (int argc, char *argv[])
                 "--crop %@ %s", action_crop, NULL, "Set pixel data resolution and offset, cropping or padding if necessary (WxH+X+Y or xmin,ymin,xmax,ymax)",
                 "--croptofull %@", action_croptofull, NULL, "Crop or pad to make pixel data region match the \"full\" region",
                 "--resize %@ %s", action_resize, NULL, "Resize (640x480, 50%) (optional args: filter=%s)",
-                "--fit %@ %s", action_fit, NULL, "Resize to fit within a window size (optional args: filter=%s)",
+                "--fit %@ %s", action_fit, NULL, "Resize to fit within a window size (optional args: filter=%s, pad=%d)",
                 "--fixnan %@ %s", action_fixnan, NULL, "Fix NaN/Inf values in the image (options: none, black, box3)",
                 "--fill %@ %s", action_fill, NULL, "Fill a region (options: color=)",
                 "--text %@ %s", action_text, NULL,
@@ -2111,6 +2290,8 @@ getargs (int argc, char *argv[])
                 "<SEPARATOR>", "Image stack manipulation:",
                 "--ch %@ %s", action_channels, NULL,
                     "Select or shuffle channels (e.g., \"R,G,B\", \"B,G,R\", \"2,3,4\")",
+                "--chappend %@", action_chappend, NULL,
+                    "Append the channels of the last two images",
                 "--unmip %@", action_unmip, NULL, "Discard all but the top level of a MIPmap",
                 "--selectmip %@ %d", action_selectmip, NULL,
                     "Select just one MIP level (0 = highest res)",
@@ -2161,6 +2342,210 @@ getargs (int argc, char *argv[])
 
 
 
+// Given a sequence description, generate numbers.
+static void
+generate_sequence (std::string seqdesc, int framepadding,
+                   std::vector<std::string> &numbers)
+{
+    numbers.clear ();
+    std::string format = Strutil::format ("%%0%dd", framepadding);
+
+    // Split the sequence description into comma-separated subranges.
+    std::vector<std::string> sequences;
+    Strutil::split (seqdesc, sequences, ",");
+
+    // For each subrange...
+    BOOST_FOREACH (std::string s, sequences) {
+        // It's START, START-END, or START-ENDxSTEP
+        std::vector<std::string> range;
+        Strutil::split (s, range, "-");
+        int first = strtol (range[0].c_str(), NULL, 10);
+        int last = first;
+        int step = 1;
+        if (range.size() > 1) {
+            last = strtol (range[1].c_str(), NULL, 10);
+            if (const char *x = strchr (range[1].c_str(), 'x'))
+                step = std::max (1, (int) strtol (x+1, NULL, 10));
+        }
+        for (int i = first; i <= last; i += step)
+            numbers.push_back (Strutil::format (format.c_str(), i));
+    }
+    // std::cout << "Sequence " << Strutil::join(numbers, " ") << "\n";
+}
+
+
+
+// Given a pattern (such as "foo.#.tif" or "bar.1-10#.exr"), produce a
+// list of matching filenames.  Explicit ranges enumerate the range,
+// whereas full numeric wildcards search for existing files.
+static bool
+deduce_sequence (std::string pattern, int framepadding,
+                 std::vector<std::string> &filenames,
+                 std::vector<std::string> &numbers)
+{
+    filenames.clear ();
+
+    // Isolate the directory name (or '.' if none was specified)
+    std::string directory = Filesystem::parent_path (pattern);
+    if (directory.size() == 0) {
+        directory = ".";
+        pattern = "./" + pattern;
+    }
+
+    // The pattern is either a range (e.g., "1-15#"), or just a 
+    // set of hash marks (e.g. "####").
+    static boost::regex range_re ("([0-9]+)\\-([0-9]+)#+");
+    static boost::regex hash_re ("#+");
+
+    boost::match_results<std::string::const_iterator> range_match;
+    if (boost::regex_search (pattern, range_match, range_re)) {
+        // It's a range. Generate the names by iterating through the
+        // numbers.  
+        std::string prefix (range_match.prefix().first, range_match.prefix().second);
+        std::string suffix (range_match.suffix().first, range_match.suffix().second);
+        std::string r1 (range_match[1].first, range_match[1].second);
+        std::string r2 (range_match[2].first, range_match[2].second);
+        int rangefirst = (int) strtol (r1.c_str(), NULL, 10);
+        int rangelast = (int) strtol (r2.c_str(), NULL, 10);
+        // Only save the numbers if it's not already filled in.
+        bool save_numbers = (numbers.size() == 0);
+
+        // There are two cases: either the files exist, or they don't.
+        // Check the first one and assume it's the same for all.
+        for (int r = rangefirst; r <= rangelast; ++r) {
+            // Try up to 4 leading zeroes
+            std::string f, num;
+            for (int i = 1; i <= framepadding; ++i) {
+                std::string fmt = Strutil::format ("%%0%dd", i);
+                std::string num = Strutil::format (fmt.c_str(), r);
+                f = prefix + num + suffix;
+                if (Filesystem::exists (f))
+                    break;  // found it
+            }
+            // At this point, we either have an f that exists, or f is
+            // the file with 4 digit number.
+            filenames.push_back (f);
+            if (save_numbers)
+                numbers.push_back (f);
+        }
+
+    } else if (numbers.size()) {
+        // Numeric wildcard, and an earlier argument has already
+        // expanded into a specific series of numbers.  We MUST make
+        // this wildcard expand to the same set of numbers.
+        for (size_t i = 0; i < numbers.size(); ++i) {
+            std::string f = boost::regex_replace (pattern, hash_re, numbers[i]);
+            filenames.push_back (f);
+        }
+
+    } else {
+        // Numeric wildcard, but we don't yet have a prescribed frame
+        // range, so search the directories for matches.
+
+        pattern = boost::regex_replace (pattern, hash_re, "([0-9]+)");
+        pattern = "^" + pattern + "$";
+        bool ok = Filesystem::get_directory_entries (directory, filenames,
+                                                     false, pattern);
+        if (! ok)
+            return false;
+
+        boost::regex pattern_re (pattern);
+        for (size_t i = 0; i < filenames.size(); ++i) {
+            boost::match_results<std::string::const_iterator> match;
+            bool ok = boost::regex_search (filenames[i], match, pattern_re);
+            ASSERT (ok);  // should have matched
+            std::string num (match[1].first, match[1].second);
+            numbers.push_back (num);
+        }
+    }
+
+
+//    std::cout << "Matches: \n\t" << Strutil::join (filenames, "\n\t") << "\n";
+    return true;
+}
+
+
+
+// Check if any of the command line arguments contains numeric ranges or
+// wildcards.  If not, just return 'false'.  But if they do, the
+// remainder of processing will happen here (and return 'true').
+static bool 
+handle_sequence (int argc, const char **argv)
+{
+    // First, scan the original command line arguments for '#'
+    // characters.  Any found indicate that there are numeric rnage or
+    // wildcards to deal with.  Also look for --frames and --framepadding
+    // options.
+    std::string framenumbers_string;
+    int framepadding = 4;
+    std::vector<int> sequence_args;  // Args with sequence numbers
+    bool is_sequence = false;
+    for (int a = 1;  a < argc;  ++a) {
+        if (strchr (argv[a], '#')) {
+            is_sequence = true;
+            sequence_args.push_back (a);
+        }
+        if (! strcmp (argv[a], "--frames") && a < argc-1) {
+            framenumbers_string = argv[++a];
+        }
+        else if (! strcmp (argv[a], "--framepadding") && a < argc-1) {
+            int f = atoi (argv[++a]);
+            if (f >= 1 && f < 10)
+                framepadding = f;
+        }
+    }
+
+    // No ranges or wildcards?
+    if (! is_sequence)
+        return false;
+
+    std::vector<std::string> numbers;
+
+    // If an explicit frame sequence was given, elaborate it.
+    if (framenumbers_string.size())
+        generate_sequence (framenumbers_string, framepadding, numbers);
+
+    // For each of the arguments that contains a wildcard, use
+    // deduce_sequence to fully elaborate all the filenames in the
+    // sequence.  It's an error if the sequences are not all of the
+    // same length.
+    std::vector< std::vector<std::string> > filenames (argc+1);
+    size_t nfilenames = 0;
+    for (size_t i = 0;  i < sequence_args.size();  ++i) {
+        int a = sequence_args[i];
+        deduce_sequence (argv[a], framepadding, filenames[a], numbers);
+        if (i == 0) {
+            nfilenames = filenames[a].size();
+        } else if (nfilenames != filenames[a].size()) {
+            ot.error (Strutil::format("Not all sequence specifications matched: %s vs. %s",
+                                      argv[sequence_args[0]], argv[a]), "");
+            return true;
+        }
+    }
+
+    // OK, now we just call getargs once for each item in the sequences,
+    // substituting the i-th sequence entry for its respective argument
+    // every time.
+    std::vector<const char *> seq_argv (argv, argv+argc+1);
+    for (size_t i = 0;  i < nfilenames;  ++i) {
+        for (size_t j = 0;  j < sequence_args.size();  ++j) {
+            size_t a = sequence_args[j];
+            seq_argv[a] = filenames[a][i].c_str();
+        }
+        ot.clear_options (); // Careful to reset all command line options!
+        getargs (argc, (char **)&seq_argv[0]);
+        ot.process_pending ();
+        if (ot.pending_callback()) {
+            std::cout << "oiiotool WARNING: pending '" << ot.pending_callback_name()
+                      << "' command never executed.\n";
+        }
+    }
+
+    return true;
+}
+
+
+
 int
 main (int argc, char *argv[])
 {
@@ -2173,11 +2558,17 @@ main (int argc, char *argv[])
     ot.imagecache->attribute ("statistics:level", 2);
 #endif
 
-    getargs (argc, argv);
-    ot.process_pending ();
-    if (ot.pending_callback()) {
-        std::cout << "oiiotool WARNING: pending '" << ot.pending_callback_name()
-                  << "' command never executed.\n";
+    if (handle_sequence (argc, (const char **)argv)) {
+        // Deal with sequence
+
+    } else {
+        // Not a sequence
+        getargs (argc, argv);
+        ot.process_pending ();
+        if (ot.pending_callback()) {
+            std::cout << "oiiotool WARNING: pending '" << ot.pending_callback_name()
+                      << "' command never executed.\n";
+        }
     }
 
     return ot.return_value;

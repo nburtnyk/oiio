@@ -450,6 +450,85 @@ ImageBufAlgo::setNumChannels(ImageBuf &dst, const ImageBuf &src, int numChannels
 
 
 
+template<class ABtype>
+static bool
+channel_append_impl (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
+                     ROI roi, int nthreads)
+{
+    if (nthreads == 1 || roi.npixels() < 1000) {
+        int na = A.nchannels(), nb = B.nchannels();
+        int n = std::min (dst.nchannels(), na+nb);
+        ImageBuf::Iterator<float> r (dst, roi);
+        ImageBuf::ConstIterator<ABtype> a (A, roi);
+        ImageBuf::ConstIterator<ABtype> b (B, roi);
+        for (;  !r.done();  ++r) {
+            a.pos (r.x(), r.y(), r.z());
+            b.pos (r.x(), r.y(), r.z());
+            for (int c = 0; c < n; ++c) {
+                if (c < na)
+                    r[c] = a.exists() ? a[c] : 0.0f;
+                else
+                    r[c] = b.exists() ? b[c-na] : 0.0f;
+            }
+        }
+    } else {
+        // Possible multiple thread case -- recurse via parallel_image
+        ImageBufAlgo::parallel_image (
+            boost::bind (channel_append_impl<ABtype>, boost::ref(dst),
+                         boost::cref(A), boost::cref(B), _1, 1),
+            roi, nthreads);
+    }
+    return true;
+}
+
+
+bool
+ImageBufAlgo::channel_append (ImageBuf &dst, const ImageBuf &A,
+                              const ImageBuf &B, ROI roi,
+                              int nthreads)
+{
+    // If the region is not defined, set it to the union of the valid
+    // regions of the two source images.
+    if (! roi.defined())
+        roi = roi_union (get_roi (A.spec()), get_roi (B.spec()));
+
+    // If dst has not already been allocated, set it to the right size,
+    // make it unconditinally float.
+    if (! dst.pixels_valid()) {
+        ImageSpec dstspec = A.spec();
+        dstspec.set_format (TypeDesc::TypeFloat);
+        // Append the channel descriptions
+        dstspec.nchannels = A.spec().nchannels + B.spec().nchannels;
+        for (int c = 0;  c < B.spec().nchannels;  ++c) {
+            std::string name = B.spec().channelnames[c];
+            // Eliminate duplicates
+            if (std::find(dstspec.channelnames.begin(), dstspec.channelnames.end(), name) != dstspec.channelnames.end())
+                name = Strutil::format ("channel%d", A.spec().nchannels+c);
+            dstspec.channelnames.push_back (name);
+        }
+        if (dstspec.alpha_channel < 0 && B.spec().alpha_channel >= 0)
+            dstspec.alpha_channel = B.spec().alpha_channel + A.nchannels();
+        if (dstspec.z_channel < 0 && B.spec().z_channel >= 0)
+            dstspec.z_channel = B.spec().z_channel + A.nchannels();
+        set_roi (dstspec, roi);
+        dst.reset (dst.name(), dstspec);
+    }
+
+    // For now, only support float destination, and equivalent A and B
+    // types.
+    if (dst.spec().format != TypeDesc::FLOAT ||
+        A.spec().format != B.spec().format) {
+        dst.error ("Unable to perform channel_append of %s, %s -> %s",
+                   A.spec().format, B.spec().format, dst.spec().format);
+        return false;
+    }
+
+    OIIO_DISPATCH_TYPES ("channel_append", channel_append_impl,
+                         A.spec().format, dst, A, B, roi, nthreads);
+    return true;
+}
+
+
 
 bool
 ImageBufAlgo::add (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
@@ -949,32 +1028,26 @@ ImageBufAlgo::computePixelHashSHA1(const ImageBuf &src)
 
 
 
-namespace { // anonymous namespace
-
 template<typename SRCTYPE>
-bool resize_ (ImageBuf &dst, const ImageBuf &src,
-              int xbegin, int xend, int ybegin, int yend,
-              Filter2D *filter)
+static bool
+resize_ (ImageBuf &dst, const ImageBuf &src,
+         Filter2D *filter, ROI roi, int nthreads)
 {
+    if (nthreads != 1 && roi.npixels() >= 1000) {
+        // Lots of pixels and request for multi threads? Parallelize.
+        ImageBufAlgo::parallel_image (
+            boost::bind(resize_<SRCTYPE>, boost::ref(dst),
+                        boost::cref(src), filter,
+                        _1 /*roi*/, 1 /*nthreads*/),
+            roi, nthreads);
+        return true;
+    }
+
+    // Serial case
+
     const ImageSpec &srcspec (src.spec());
     const ImageSpec &dstspec (dst.spec());
     int nchannels = dstspec.nchannels;
-
-    if (dstspec.format.basetype != TypeDesc::FLOAT) {
-        dst.error ("only 'float' images are supported");
-        return false;
-    }
-    if (nchannels != srcspec.nchannels) {
-        dst.error ("channel number mismatch: %d vs. %d", 
-                   dst.spec().nchannels, src.spec().nchannels);
-        return false;
-    }
-
-    bool allocfilter = (filter == NULL);
-    if (allocfilter) {
-        // If no filter was provided, punt and just linearly interpolate
-        filter = Filter2D::create ("triangle", 2.0f, 2.0f);
-    }
 
     // Local copies of the source image window, converted to float
     float srcfx = srcspec.full_x;
@@ -996,16 +1069,8 @@ bool resize_ (ImageBuf &dst, const ImageBuf &src,
     float filterrad = filter->width() / 2.0f;
     // radi,radj is the filter radius, as an integer, in source pixels.  We
     // will filter the source over [x-radi, x+radi] X [y-radj,y+radj].
-    int radi = (int) ceilf (filterrad/xratio) + 1;
-    int radj = (int) ceilf (filterrad/yratio) + 1;
-
-#if 0
-    std::cerr << "Resizing " << srcspec.full_width << "x" << srcspec.full_height
-              << " to " << dstspec.full_width << "x" << dstspec.full_height << "\n";
-    std::cerr << "ratios = " << xratio << ", " << yratio << "\n";
-    std::cerr << "examining src filter support radius of " << radi << " x " << radj << " pixels\n";
-    std::cerr << "dst range " << xbegin << ' ' << xend << " x " << ybegin << ' ' << yend << "\n";
-#endif
+    int radi = (int) ceilf (filterrad/xratio);
+    int radj = (int) ceilf (filterrad/yratio);
 
     bool separable = filter->separable();
     float *column = NULL;
@@ -1014,7 +1079,16 @@ bool resize_ (ImageBuf &dst, const ImageBuf &src,
         column = ALLOCA (float, (2 * radj + 1) * nchannels);
     }
 
-    for (int y = ybegin;  y < yend;  ++y) {
+#if 0
+    std::cerr << "Resizing " << srcspec.full_width << "x" << srcspec.full_height
+              << " to " << dstspec.full_width << "x" << dstspec.full_height << "\n";
+    std::cerr << "ratios = " << xratio << ", " << yratio << "\n";
+    std::cerr << "examining src filter support radius of " << radi << " x " << radj << " pixels\n";
+    std::cerr << "dst range " << roi << "\n";
+    std::cerr << "separable filter\n";
+#endif
+
+    for (int y = roi.ybegin;  y < roi.yend;  ++y) {
         // s,t are NDC space
         float t = (y+0.5f)*dstpixelheight;
         // src_xf, src_xf are image space float coordinates
@@ -1022,7 +1096,7 @@ bool resize_ (ImageBuf &dst, const ImageBuf &src,
         // src_x, src_y are image space integer coordinates of the floor
         int src_y;
         float src_yf_frac = floorfrac (src_yf, &src_y);
-        for (int x = xbegin;  x < xend;  ++x) {
+        for (int x = roi.xbegin;  x < roi.xend;  ++x) {
             float s = (x+0.5f)*dstpixelwidth;
             float src_xf = srcfx + s * srcfw - 0.5f;
             int src_x;
@@ -1036,26 +1110,15 @@ bool resize_ (ImageBuf &dst, const ImageBuf &src,
                 float *p = column;
                 for (int j = -radj;  j <= radj;  ++j, p += nchannels) {
                     totalweight = 0.0f;
-                    int yclamped = Imath::clamp (src_y+j, src.ymin(), src.ymax());
+                    int yy = src_y+j;
                     ImageBuf::ConstIterator<SRCTYPE> srcpel (src, src_x-radi, src_x+radi+1,
-                                                           yclamped, yclamped+1,
-                                                           0, 1, true);
+                                                             yy, yy+1, 0, 1, true);
                     for (int i = -radi;  i <= radi;  ++i, ++srcpel) {
                         float w = filter->xfilt (xratio * (i-src_xf_frac));
-                        if (w == 0.0f)
-                            continue;
-                        totalweight += w;
-                        if (srcpel.exists()) {
+                        if (w != 0.0f && srcpel.exists()) {
                             for (int c = 0;  c < nchannels;  ++c)
                                 p[c] += w * srcpel[c];
-                        } else {
-                            // Outside data window -- construct a clamped
-                            // iterator for just that pixel
-                            int xclamped = Imath::clamp (src_x+i, src.xmin(), src.xmax());
-                            ImageBuf::ConstIterator<SRCTYPE> clamped = srcpel;
-                            clamped.pos (xclamped, yclamped);
-                            for (int c = 0;  c < nchannels;  ++c)
-                                p[c] += w * clamped[c];
+                            totalweight += w;
                         }
                     }
                     if (totalweight != 0.0f) {
@@ -1067,10 +1130,13 @@ bool resize_ (ImageBuf &dst, const ImageBuf &src,
                 totalweight = 0.0f;
                 p = column;
                 for (int j = -radj;  j <= radj;  ++j, p += nchannels) {
-                    float w = filter->yfilt (yratio * (j-src_yf_frac));
-                    totalweight += w;
-                    for (int c = 0;  c < nchannels;  ++c)
-                        pel[c] += w * p[c];
+                    int yy = src_y+j;
+                    if (yy >= src.ymin() && yy <= src.ymax()) {
+                        float w = filter->yfilt (yratio * (j-src_yf_frac));
+                        totalweight += w;
+                        for (int c = 0;  c < nchannels;  ++c)
+                            pel[c] += w * p[c];
+                    }
                 }
 
             } else {
@@ -1084,19 +1150,11 @@ bool resize_ (ImageBuf &dst, const ImageBuf &src,
                                             yratio * (j-src_yf_frac));
                         if (w == 0.0f)
                             continue;
-                        totalweight += w;
                         DASSERT (! srcpel.done());
                         if (srcpel.exists()) {
                             for (int c = 0;  c < nchannels;  ++c)
                                 pel[c] += w * srcpel[c];
-                        } else {
-                            // Outside data window -- construct a clamped
-                            // iterator for just that pixel
-                            ImageBuf::ConstIterator<SRCTYPE> clamped = srcpel;
-                            clamped.pos (Imath::clamp (srcpel.x(), src.xmin(), src.xmax()),
-                                         Imath::clamp (srcpel.y(), src.ymin(), src.ymax()));
-                            for (int c = 0;  c < nchannels;  ++c)
-                                pel[c] += w * clamped[c];
+                            totalweight += w;
                         }
                     }
                 }
@@ -1117,23 +1175,57 @@ bool resize_ (ImageBuf &dst, const ImageBuf &src,
         }
     }
 
-    if (allocfilter)
-        Filter2D::destroy (filter);
     return true;
 }
 
-} // end anonymous namespace
 
 
+bool
+ImageBufAlgo::resize (ImageBuf &dst, const ImageBuf &src,
+                      Filter2D *filter, ROI roi, int nthreads)
+{
+//    IBAprep (roi, &dst, &src);
+    if (dst.nchannels() != src.nchannels()) {
+        dst.error ("channel number mismatch: %d vs. %d", 
+                   dst.spec().nchannels, src.spec().nchannels);
+        return false;
+    }
+
+    // Set up a shared pointer with custom deleter to make sure any
+    // filter we allocate here is properly destroyed.
+    boost::shared_ptr<Filter2D> filterptr ((Filter2D*)NULL, Filter2D::destroy);
+    bool allocfilter = (filter == NULL);
+    if (allocfilter) {
+        // If no filter was provided, punt and just linearly interpolate.
+        const ImageSpec &srcspec (src.spec());
+        const ImageSpec &dstspec (dst.spec());
+        float wratio = float(dstspec.full_width) / float(srcspec.full_width);
+        float hratio = float(dstspec.full_height) / float(srcspec.full_height);
+        float w = 2.0f * std::max (1.0f, wratio);
+        float h = 2.0f * std::max (1.0f, hratio);
+        filter = Filter2D::create ("triangle", w, h);
+        filterptr.reset (filter);
+    }
+
+    OIIO_DISPATCH_TYPES ("resize", resize_,
+                          src.spec().format,
+                          dst, src, filter, roi, nthreads);
+
+    return false;
+}
+
+
+
+// DEPRECATED as of 1.2
 bool
 ImageBufAlgo::resize (ImageBuf &dst, const ImageBuf &src,
                       int xbegin, int xend, int ybegin, int yend,
                       Filter2D *filter)
 {
-    OIIO_DISPATCH_TYPES ("resize", resize_, src.spec().format,
-                         dst, src, xbegin, xend, ybegin, yend, filter);
-    return false;
+    return resize (dst, src, filter, ROI (xbegin, xend, ybegin, yend, 0, 1));
 }
+
+
 
 namespace
 {

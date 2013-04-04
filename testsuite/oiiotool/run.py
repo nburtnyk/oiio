@@ -24,10 +24,21 @@ command += (oiio_app ("oiiotool") + " "
             + parent + "/oiio-images/grid.tif"
             + " --resize 25% -o resize2.tif >> out.txt ;\n")
 
+# test extreme resize
+command += (oiio_app ("oiiotool")
+            + parent + "/oiio-images/grid.tif"
+            + " --resize 64x64 -o resize64.tif >> out.txt ;\n")
+command += (oiio_app ("oiiotool")
+            + "resize64.tif "
+            + " --resize 512x512 -o resize512.tif >> out.txt ;\n")
+
 # test fit
 command += (oiio_app ("oiiotool") + " " 
             + parent + "/oiio-images/grid.tif"
             + " --fit 360x240 -d uint8 -o fit.tif >> out.txt ;\n")
+command += (oiio_app ("oiiotool") + " " 
+            + parent + "/oiio-images/grid.tif"
+            + " --fit 240x360 -d uint8 -o fit2.tif >> out.txt ;\n")
 
 # test --cmul
 # First, make a small gray swatch
@@ -54,13 +65,20 @@ command += (oiio_app ("oiiotool") + " "
             + parent + "/oiio-images/grid.tif"
             + " --ch =0.25,B,G -o chanshuffle.tif >> out.txt ;\n")
 
+# test sequences
+command += (oiio_app("oiiotool")
+            + "fit.tif -o copyA.1-10#.jpg >> out.txt ;\n");
+command += (oiio_app("oiiotool") + " --info copyA.*.jpg >> out.txt ;\n")
+
 # To add more tests, just append more lines like the above and also add
 # the new 'feature.tif' (or whatever you call it) to the outputs list,
 # below.
 
 
 # Outputs to check against references
-outputs = [ "filled.tif", "resize.tif", "resize2.tif", "fit.tif",
+outputs = [ "filled.tif", "resize.tif", "resize2.tif",
+            "resize64.tif", "resize512.tif",
+            "fit.tif", "fit2.tif",
             "histogram_regular.tif", "histogram_cumulative.tif",
             "chanshuffle.tif", "cmul1.exr", "cmul2.exr",
             "out.txt" ]
