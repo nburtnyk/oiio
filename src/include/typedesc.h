@@ -85,11 +85,17 @@ struct OIIO_API TypeDesc {
     /// AGGREGATE describes whether our type is a simple scalar of
     /// one of the BASETYPE's, or one of several simple aggregates.
     enum AGGREGATE { SCALAR=1, VEC2=2, VEC3=3, VEC4=4, MATRIX44=16 };
-    /// VECSEMANTICS describes, for non-SCALAR aggregates, whether our
-    /// type is like a color (raw values) or if it has coordinate
-    /// transformation rules similar to a point, vector (direction),
-    /// or surface normal.
-    enum VECSEMANTICS { NOXFORM=0, COLOR, POINT, VECTOR, NORMAL };
+    /// VECSEMANTICS gives hints about what the data represent (for
+    /// example, if a spatial vector, whether it should transform as
+    /// a point, direction vector, or surface normal).
+    enum VECSEMANTICS { NOXFORM=0, NOSEMANTICS=0,  // no semantic hints
+                        COLOR,    // color
+                        POINT,    // spatial location
+                        VECTOR,   // spatial direction
+                        NORMAL,   // surface normal
+                        TIMECODE, // SMPTE timecode (should be int[2])
+                        KEYCODE   // SMPTE keycode (should be int[7])
+                      };
 
     unsigned char basetype;     ///< C data type at the heart of our type
     unsigned char aggregate;    ///< What kind of AGGREGATE is it?
@@ -137,6 +143,13 @@ struct OIIO_API TypeDesc {
     /// Construct from a string (e.g., "float[3]").  If no valid
     /// type could be assembled, set base to UNKNOWN.
     TypeDesc (const char *typestring);
+
+    /// Copy constructor.
+    TypeDesc (const TypeDesc &t)
+        : basetype(t.basetype), aggregate(t.aggregate),
+          vecsemantics(t.vecsemantics), reserved(0), arraylen(t.arraylen)
+          { }
+
 
     /// Return the name, for printing and whatnot.  For example,
     /// "float", "int[5]", "normal"
@@ -225,7 +238,12 @@ struct OIIO_API TypeDesc {
     friend bool equivalent (TypeDesc a, TypeDesc b) {
         return a.basetype == b.basetype && a.aggregate == b.aggregate &&
                a.arraylen == b.arraylen;
-    }        
+    }
+    /// Member version of equivalent
+    bool equivalent (TypeDesc b) const {
+        return this->basetype == b.basetype && this->aggregate == b.aggregate &&
+               this->arraylen == b.arraylen;
+    }
 
     /// Demote the type to a non-array
     ///
@@ -239,7 +257,21 @@ struct OIIO_API TypeDesc {
     static const TypeDesc TypeVector;
     static const TypeDesc TypeNormal;
     static const TypeDesc TypeMatrix;
+    static const TypeDesc TypeTimeCode;
+    static const TypeDesc TypeKeyCode;
 };
+
+
+
+/// Return a string containing the data values formatted according
+/// to the type and the optional formatting arguments.
+std::string tostring (TypeDesc type, const void *data,
+                      const char *float_fmt = "%f",         // E.g. "%g"
+                      const char *string_fmt = "%s",        // E.g. "\"%s\""
+                      const char aggregate_delim[2] = "()", // Both sides of vector
+                      const char *aggregate_sep = ",",      // E.g. ", "
+                      const char array_delim[2] = "{}",     // Both sides of array
+                      const char *array_sep = ",");         // E.g. "; "
 
 
 

@@ -13,12 +13,12 @@ Reading ../../../../../TGAUTILS/CBW8.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 1
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 76, 76, 76, 76, 149, 149, 149, 149, 178, 178, 178, 178, 0, 0, 0, 0, ...
 Comparing "../../../../../TGAUTILS/CBW8.TGA" and "CBW8.TGA"
 PASS
 Reading ../../../../../TGAUTILS/CCM8.TGA
 ../../../../../TGAUTILS/CCM8.TGA :  128 x  128, 3 channel, uint2 targa
-    SHA-1: 1CA776B45486FB52A5A8953F9BAE94975933334D
+    SHA-1: C3CFE6424C5A9D88BB212BFE230F5B9875F434C4
     channel list: R, G, B
     oiio:BitsPerSample: 2
     compression: "rle"
@@ -31,7 +31,7 @@ Reading ../../../../../TGAUTILS/CCM8.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 3
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, ...
 Comparing "../../../../../TGAUTILS/CCM8.TGA" and "CCM8.TGA"
 PASS
 Reading ../../../../../TGAUTILS/CTC16.TGA
@@ -49,7 +49,7 @@ Reading ../../../../../TGAUTILS/CTC16.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 3
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, ...
 Comparing "../../../../../TGAUTILS/CTC16.TGA" and "CTC16.TGA"
 PASS
 Reading ../../../../../TGAUTILS/CTC24.TGA
@@ -67,12 +67,12 @@ Reading ../../../../../TGAUTILS/CTC24.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 3
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, ...
 Comparing "../../../../../TGAUTILS/CTC24.TGA" and "CTC24.TGA"
 PASS
 Reading ../../../../../TGAUTILS/CTC32.TGA
 ../../../../../TGAUTILS/CTC32.TGA :  128 x  128, 4 channel, uint8 targa
-    SHA-1: 10856DDA29920D800808DDF85D4AC7860E0B310C
+    SHA-1: 1ADC95BEBE9EEA8C112D40CD04AB7A8D75C4F961
     channel list: R, G, B, A
     oiio:BitsPerSample: 8
     compression: "rle"
@@ -85,7 +85,7 @@ Reading ../../../../../TGAUTILS/CTC32.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 4
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, ...
 Comparing "../../../../../TGAUTILS/CTC32.TGA" and "CTC32.TGA"
 PASS
 Reading ../../../../../TGAUTILS/UBW8.TGA
@@ -102,12 +102,12 @@ Reading ../../../../../TGAUTILS/UBW8.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 1
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 76, 76, 76, 76, 149, 149, 149, 149, 178, 178, 178, 178, 0, 0, 0, 0, ...
 Comparing "../../../../../TGAUTILS/UBW8.TGA" and "UBW8.TGA"
 PASS
 Reading ../../../../../TGAUTILS/UCM8.TGA
 ../../../../../TGAUTILS/UCM8.TGA :  128 x  128, 3 channel, uint2 targa
-    SHA-1: 1CA776B45486FB52A5A8953F9BAE94975933334D
+    SHA-1: C3CFE6424C5A9D88BB212BFE230F5B9875F434C4
     channel list: R, G, B
     oiio:BitsPerSample: 2
     targa:ImageID: "Truevision(R) Sample Image"
@@ -119,7 +119,7 @@ Reading ../../../../../TGAUTILS/UCM8.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 3
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, ...
 Comparing "../../../../../TGAUTILS/UCM8.TGA" and "UCM8.TGA"
 PASS
 Reading ../../../../../TGAUTILS/UTC16.TGA
@@ -136,7 +136,7 @@ Reading ../../../../../TGAUTILS/UTC16.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 3
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, ...
 Comparing "../../../../../TGAUTILS/UTC16.TGA" and "UTC16.TGA"
 PASS
 Reading ../../../../../TGAUTILS/UTC24.TGA
@@ -153,12 +153,12 @@ Reading ../../../../../TGAUTILS/UTC24.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 3
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, ...
 Comparing "../../../../../TGAUTILS/UTC24.TGA" and "UTC24.TGA"
 PASS
 Reading ../../../../../TGAUTILS/UTC32.TGA
 ../../../../../TGAUTILS/UTC32.TGA :  128 x  128, 4 channel, uint8 targa
-    SHA-1: 10856DDA29920D800808DDF85D4AC7860E0B310C
+    SHA-1: 1ADC95BEBE9EEA8C112D40CD04AB7A8D75C4F961
     channel list: R, G, B, A
     oiio:BitsPerSample: 8
     targa:ImageID: "Truevision(R) Sample Image"
@@ -170,6 +170,6 @@ Reading ../../../../../TGAUTILS/UTC32.TGA
     thumbnail_width: 64
     thumbnail_height: 64
     thumbnail_nchannels: 4
-    thumbnail_image: <unknown data type> (base 2, agg 1 vec 0)
+    thumbnail_image: 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, ...
 Comparing "../../../../../TGAUTILS/UTC32.TGA" and "UTC32.TGA"
 PASS

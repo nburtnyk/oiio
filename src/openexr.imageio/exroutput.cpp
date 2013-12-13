@@ -51,6 +51,10 @@
 #include <OpenEXR/ImfMatrixAttribute.h>
 #include <OpenEXR/ImfVecAttribute.h>
 #include <OpenEXR/ImfStringAttribute.h>
+#include <OpenEXR/ImfStringVectorAttribute.h>
+#include <OpenEXR/ImfTimeCodeAttribute.h>
+#include <OpenEXR/ImfKeyCodeAttribute.h>
+#include <OpenEXR/ImfBoxAttribute.h>
 #include <OpenEXR/ImfEnvmapAttribute.h>
 #include <OpenEXR/ImfCompressionAttribute.h>
 #include <OpenEXR/ImfCRgbaFile.h>  // JUST to get symbols to figure out version!
@@ -629,6 +633,11 @@ OpenEXROutput::spec_to_header (ImageSpec &spec, Imf::Header &header)
     if (! spec.find_attribute("compression"))
         spec.attribute ("compression", "zip");
 
+    // It seems that zips is the only compression that can reliably work
+    // on deep files.
+    if (spec.deep)
+        spec.attribute ("compression", "zips");
+
     // Default to increasingY line order, same as EXR.
     if (! spec.find_attribute("openexr:lineOrder"))
         spec.attribute ("openexr:lineOrder", "increasingY");
@@ -785,6 +794,12 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
         return true;
     }
 
+    // SMPTE types
+    if (Strutil::iequals (xname, "smpte:TimeCode"))
+        xname = "timeCode";
+    if (Strutil::iequals (xname, "smpte:KeyCode"))
+        xname = "keyCode";
+
     // Supress planarconfig!
     if (Strutil::iequals (xname, "planarconfig") || Strutil::iequals (xname, "tiff:planarconfig"))
         return true;
@@ -814,47 +829,205 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
         }
     }
 
-    // General handling of attributes
-    // FIXME -- police this if we ever allow arrays
-    if (type == TypeDesc::INT || type == TypeDesc::UINT) {
-        header.insert (xname.c_str(), Imf::IntAttribute (*(int*)data));
-        return true;
-    }
-    if (type == TypeDesc::INT16) {
-        header.insert (xname.c_str(), Imf::IntAttribute (*(short*)data));
-        return true;
-    }
-    if (type == TypeDesc::UINT16) {
-        header.insert (xname.c_str(), Imf::IntAttribute (*(unsigned short*)data));
-        return true;
-    }
-    if (type == TypeDesc::FLOAT) {
-        header.insert (xname.c_str(), Imf::FloatAttribute (*(float*)data));
-        return true;
-    }
-    if (type == TypeDesc::HALF) {
-        header.insert (xname.c_str(), Imf::FloatAttribute ((float)*(half*)data));
-        return true;
-    }
-    if (type == TypeDesc::TypeMatrix) {
-        header.insert (xname.c_str(), Imf::M44fAttribute (*(Imath::M44f*)data));
-        return true;
-    }
-    if (type == TypeDesc::TypeString) {
-        header.insert (xname.c_str(), Imf::StringAttribute (*(char**)data));
-        return true;
-    }
-    if (type == TypeDesc::TypeVector) {
-        header.insert (xname.c_str(), Imf::V3fAttribute (*(Imath::V3f*)data));
-        return true;
-    }
-    if (type == TypeDesc(TypeDesc::FLOAT,TypeDesc::VEC2) ||
-        type == TypeDesc(TypeDesc::FLOAT,2) /* array float[2] */) {
-        header.insert (xname.c_str(), Imf::V2fAttribute (*(Imath::V2f*)data));
-        return true;
+    // A few EXR things to suppress -- they should be added automatically by
+    // the library, don't mess it up by inadvertently copying it wrong from
+    // the user or from a file we read.
+    if (Strutil::iequals(xname, "type") ||
+        Strutil::iequals(xname, "version") ||
+        Strutil::iequals(xname, "chunkCount") ||
+        Strutil::iequals(xname, "maxSamplesPerPixel")) {
+        return false;
     }
 
-#ifdef DEBUG
+    // General handling of attributes
+
+    // Scalar
+    if (type.arraylen == 0) {
+        if (type.aggregate == TypeDesc::SCALAR) {
+
+            if (type == TypeDesc::INT || type == TypeDesc::UINT) {
+                header.insert (xname.c_str(), Imf::IntAttribute (*(int*)data));
+                return true;
+            }
+            if (type == TypeDesc::INT16) {
+                header.insert (xname.c_str(), Imf::IntAttribute (*(short*)data));
+                return true;
+            }
+            if (type == TypeDesc::UINT16) {
+                header.insert (xname.c_str(), Imf::IntAttribute (*(unsigned short*)data));
+                return true;
+            }
+            if (type == TypeDesc::FLOAT) {
+                header.insert (xname.c_str(), Imf::FloatAttribute (*(float*)data));
+                return true;
+            }
+            if (type == TypeDesc::HALF) {
+                header.insert (xname.c_str(), Imf::FloatAttribute ((float)*(half*)data));
+                return true;
+            }
+            if (type == TypeDesc::TypeString) {
+                header.insert (xname.c_str(), Imf::StringAttribute (*(char**)data));
+                return true;
+            }
+        }
+        // Single instance of aggregate type
+        if (type.aggregate == TypeDesc::VEC2) {
+            switch (type.basetype) {
+                case TypeDesc::UINT:
+                case TypeDesc::INT:
+                // TODO could probably handle U/INT16 here too
+                    header.insert (xname.c_str(), Imf::V2iAttribute (*(Imath::V2i*)data));
+                    return true;
+                case TypeDesc::FLOAT:
+                    header.insert (xname.c_str(), Imf::V2fAttribute (*(Imath::V2f*)data));
+                    return true;
+                case TypeDesc::DOUBLE:
+                    header.insert (xname.c_str(), Imf::V2dAttribute (*(Imath::V2d*)data));
+                    return true;
+                case TypeDesc::STRING:
+                    Imf::StringVector v;
+                    v.push_back(((std::string*)data)[0]);
+                    v.push_back(((std::string*)data)[1]);
+                    header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
+                    return true;
+            }
+        }
+        if (type.aggregate == TypeDesc::VEC3) {
+            switch (type.basetype) {
+                case TypeDesc::UINT:
+                case TypeDesc::INT:
+                // TODO could probably handle U/INT16 here too
+                    header.insert (xname.c_str(), Imf::V3iAttribute (*(Imath::V3i*)data));
+                    return true;
+                case TypeDesc::FLOAT:
+                    header.insert (xname.c_str(), Imf::V3fAttribute (*(Imath::V3f*)data));
+                    return true;
+                case TypeDesc::DOUBLE:
+                    header.insert (xname.c_str(), Imf::V3dAttribute (*(Imath::V3d*)data));
+                    return true;
+                case TypeDesc::STRING:
+                    Imf::StringVector v;
+                    v.push_back(((std::string*)data)[0]);
+                    v.push_back(((std::string*)data)[1]);
+                    v.push_back(((std::string*)data)[2]);
+                    header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
+                    return true;
+            }
+        }
+        if (type.aggregate == TypeDesc::MATRIX44) {
+            switch (type.basetype) {
+                case TypeDesc::FLOAT:
+                    header.insert (xname.c_str(), Imf::M44fAttribute (*(Imath::M44f*)data));
+                    return true;
+                case TypeDesc::DOUBLE:
+                    header.insert (xname.c_str(), Imf::M44dAttribute (*(Imath::M44d*)data));
+                    return true;
+            }
+        }
+    }
+    // Unknown length arrays (Don't know how to handle these yet)
+    else if (type.arraylen < 0) {
+        return false;
+    }
+    // Arrays
+    else { 
+
+        // TimeCode
+        if (type == TypeDesc::TypeTimeCode ) {
+            header.insert(xname.c_str(), Imf::TimeCodeAttribute (*(Imf::TimeCode*)data));
+            return true;
+        }
+        // KeyCode
+        else if (type == TypeDesc::TypeKeyCode ) {
+            header.insert(xname.c_str(), Imf::KeyCodeAttribute (*(Imf::KeyCode*)data));
+            return true;
+        }
+
+        // 2 Vec2's are treated as a Box
+        if (type.arraylen == 2 && type.aggregate == TypeDesc::VEC2) {
+            switch (type.basetype) {
+                case TypeDesc::UINT:
+                case TypeDesc::INT: {
+                    int *a = (int*)data;
+                    header.insert(xname.c_str(), Imf::Box2iAttribute(Imath::Box2i(Imath::V2i(a[0],a[1]), Imath::V2i(a[2],a[3]) )));
+                    return true;
+                }
+                case TypeDesc::FLOAT: {
+                    float *a = (float*)data;
+                    header.insert(xname.c_str(), Imf::Box2fAttribute(Imath::Box2f(Imath::V2f(a[0],a[1]), Imath::V2f(a[2],a[3]) )));
+                    return true;
+                }
+            }
+        }
+        // Vec 2
+        else if (type.arraylen == 2 && type.aggregate == TypeDesc::SCALAR) {
+            switch (type.basetype) {
+                case TypeDesc::UINT:
+                case TypeDesc::INT:
+                // TODO could probably handle U/INT16 here too
+                    header.insert (xname.c_str(), Imf::V2iAttribute (*(Imath::V2i*)data));
+                    return true;
+                case TypeDesc::FLOAT:
+                    header.insert (xname.c_str(), Imf::V2fAttribute (*(Imath::V2f*)data));
+                    return true;
+                case TypeDesc::DOUBLE:
+                    header.insert (xname.c_str(), Imf::V2dAttribute (*(Imath::V2d*)data));
+                    return true;
+                case TypeDesc::STRING:
+                    Imf::StringVector v;
+                    v.push_back(((std::string*)data)[0]);
+                    v.push_back(((std::string*)data)[1]);
+                    header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
+                    return true;
+            }
+        }
+        // Vec3
+        else if (type.arraylen == 3 && type.aggregate == TypeDesc::SCALAR) {
+            switch (type.basetype) {
+                case TypeDesc::UINT:
+                case TypeDesc::INT:
+                // TODO could probably handle U/INT16 here too
+                    header.insert (xname.c_str(), Imf::V3iAttribute (*(Imath::V3i*)data));
+                    return true;
+                case TypeDesc::FLOAT:
+                    header.insert (xname.c_str(), Imf::V3fAttribute (*(Imath::V3f*)data));
+                    return true;
+                case TypeDesc::DOUBLE:
+                    header.insert (xname.c_str(), Imf::V3dAttribute (*(Imath::V3d*)data));
+                    return true;
+                case TypeDesc::STRING:
+                    Imf::StringVector v;
+                    v.push_back(((std::string*)data)[0]);
+                    v.push_back(((std::string*)data)[1]);
+                    v.push_back(((std::string*)data)[2]);
+                    header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
+                    return true;
+            }
+        }
+        // Matrix
+        else if (type.arraylen == 16 && type.aggregate == TypeDesc::SCALAR) {
+            switch (type.basetype) {
+                case TypeDesc::FLOAT:
+                    header.insert (xname.c_str(), Imf::M44fAttribute (*(Imath::M44f*)data));
+                    return true;
+                case TypeDesc::DOUBLE:
+                    header.insert (xname.c_str(), Imf::M44dAttribute (*(Imath::M44d*)data));
+                    return true;
+            }
+        }
+        // String Vector
+        else if (type.basetype == TypeDesc::STRING) {
+            Imf::StringVector v;
+            for (int i=0; i<type.arraylen; i++) {
+                v.push_back(((std::string*)data)[i]);
+            }
+            header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
+            return true;
+        }
+    }
+
+
+#ifndef NDEBUG
     std::cerr << "Don't know what to do with " << type.c_str() << ' ' << xname << "\n";
 #endif
 
@@ -963,8 +1136,8 @@ OpenEXROutput::write_scanlines (int ybegin, int yend, int z,
 
     yend = std::min (yend, spec().y+spec().height);
     bool native = (format == TypeDesc::UNKNOWN);
-    imagesize_t scanlinebytes = spec().scanline_bytes(native);
-    size_t pixel_bytes = m_spec.pixel_bytes (native);
+    imagesize_t scanlinebytes = spec().scanline_bytes(true);
+    size_t pixel_bytes = m_spec.pixel_bytes (true);
     if (native && xstride == AutoStride)
         xstride = (stride_t) pixel_bytes;
     stride_t zstride = AutoStride;
@@ -1174,7 +1347,7 @@ OpenEXROutput::write_deep_scanlines (int ybegin, int yend, int z,
                                sizeof(unsigned int) * m_spec.width);
         frameBuffer.insertSampleCountSlice (countslice);
         for (int c = 0;  c < nchans;  ++c) {
-            size_t chanbytes = m_spec.channelformat(c).size();
+            size_t chanbytes = deepdata.channeltypes[c].size();
             Imf::DeepSlice slice (m_pixeltype[c],
                                   (char *)(&deepdata.pointers[c]
                                            - m_spec.x * nchans
@@ -1246,12 +1419,15 @@ OpenEXROutput::write_deep_tiles (int xbegin, int xend, int ybegin, int yend,
         }
         m_deep_tiled_output_part->setFrameBuffer (frameBuffer);
 
+        int firstxtile = (xbegin-m_spec.x) / m_spec.tile_width;
+        int firstytile = (ybegin-m_spec.y) / m_spec.tile_height;
         int xtiles = round_to_multiple (xend-xbegin, m_spec.tile_width) / m_spec.tile_width;
         int ytiles = round_to_multiple (yend-ybegin, m_spec.tile_height) / m_spec.tile_height;
 
         // Write the pixels
-        m_deep_tiled_output_part->writeTiles (0, xtiles-1, 0, ytiles-1,
-                                                 m_miplevel, m_miplevel);
+        m_deep_tiled_output_part->writeTiles (firstxtile, firstxtile+xtiles-1,
+                                              firstytile, firstytile+ytiles-1,
+                                              m_miplevel, m_miplevel);
     }
     catch (const std::exception &e) {
         error ("Failed OpenEXR write: %s", e.what());

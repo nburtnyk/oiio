@@ -69,6 +69,14 @@ OIIO_NAMESPACE_ENTER
 ///    another.reset ();             // reset to zero time again
 /// \endcode
 ///
+/// These are not very high-resolution timers.  A Timer begin/end pair
+/// takes somewhere in the neighborhood of 0.1 - 0.3 us (microseconds),
+/// and can vary by OS.  This means that (a) it's not useful for timing
+/// individual events near or below that resolution (things that would
+/// take only tens or hundreds of processor cycles, for example), and
+/// (b) calling it millions of times could make your program appreciably
+/// more expensive due to the timers themselves.
+///
 class Timer {
 public:
 #ifdef _WIN32
@@ -86,6 +94,17 @@ public:
     {
         if (startnow)
             start();
+        else {
+            // Initialize m_starttime to avoid warnings
+#ifdef _WIN32
+            m_starttime.QuadPart = 0;
+#elif defined(__APPLE__)
+            m_starttime = 0;
+#else
+            m_starttime.tv_sec = 0;
+            m_starttime.tv_usec = 0;
+#endif
+        }
     }
 
     /// Destructor.
@@ -122,7 +141,7 @@ public:
 
     /// Return just the time of the current lap (since the last call to
     /// start() or lap()), add that to the previous elapsed time, reset
-    /// current start tiem to now, keep the timer going (if it was).
+    /// current start time to now, keep the timer going (if it was).
     double lap () {
         value_t n = now();
         double r = m_ticking ? diff (m_starttime, n) : 0.0;

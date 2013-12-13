@@ -26,8 +26,8 @@ OpenImageIO consists of:
 * Plugins implementing I/O for several popular image file formats,
   including TIFF, JPEG/JFIF, OpenEXR, PNG, HDR/RGBE, ICO, BMP, Targa,
   JPEG-2000, RMan Zfile, FITS, DDS, Softimage PIC, PNM, DPX, Cineon,
-  IFF, Field3D, Ptex, Photoshop PSD, Wavefront RLA, SGI, and WebP.
-  More are being developed all the time.
+  IFF, Field3D, Ptex, Photoshop PSD, Wavefront RLA, SGI, WebP, and
+  GIF.  More are being developed all the time.
 
 * An image viewer, iv, that is based on ImageIO plugins and therefore
   can read images of any format for which an appropriate plugin may be
@@ -55,22 +55,28 @@ OpenImageIO consists of:
   and manipulating whole images in memory, and a collection of the
   most useful computations you might want to do involving those images.
 
+* Python bindings for all of the major APIs.
+
 
 
 Licensing
 ---------
 
-OpenImageIO is (c) Copyright 2008 by Larry Gritz and the other
+OpenImageIO is (c) Copyright 2008-2013 by Larry Gritz and the other
 contributors.  All Rights Reserved.
 
-OpenImageIO is distributed using the modified BSD license.  Please read
-the "LICENSE" file for the legal wording.  The plain English bottom line
-is that OpenImageIO is free, as well as freely modifiable and
-redistributable (in both source and binary form).  You may use part or
-all of it in your own applications, whether proprietary or open, free or
-commercial or not.  Using it in a commercial or proprietary application
-DOES NOT obligate you to pay us, or to use any particular licensing
-terms in your own application.
+OpenImageIO is distributed using the modified BSD license (also known as
+the "new BSD" or "3-clause BSD" license).  Please read the "LICENSE"
+file for the legal wording.  The documentation is licensed under the
+Creative Commons Attribution 3.0 Unported License
+(http://creativecommons.org/licenses/by/3.0/).
+
+The plain English bottom line is that OpenImageIO is free, as well as
+freely modifiable and redistributable (in both source and binary form).
+You may use part or all of it in your own applications, whether
+proprietary or open, free or commercial or not.  Using it in a
+commercial or proprietary application DOES NOT obligate you to pay us,
+or to use any particular licensing terms in your own application.
 
 
 Web Resources

@@ -123,13 +123,13 @@ Strutil::vformat (const char *fmt, va_list ap)
 
 
 std::string
-Strutil::memformat (off_t bytes, int digits)
+Strutil::memformat (long long bytes, int digits)
 {
     const long long KB = (1<<10);
     const long long MB = (1<<20);
     const long long GB = (1<<30);
     const char *units = "B";
-    double d = bytes;
+    double d = (double)bytes;
     if (bytes >= GB) {
         units = "GB";
         d = (double)bytes / GB;
@@ -339,6 +339,34 @@ Strutil::iends_with (const char *a, const char *b)
 }
 
 
+bool
+Strutil::contains (const std::string &a, const std::string &b)
+{
+    return boost::algorithm::contains (a, b);
+}
+
+
+bool
+Strutil::contains (const char *a, const char *b)
+{
+    return boost::algorithm::contains (a, b);
+}
+
+
+bool
+Strutil::icontains (const std::string &a, const std::string &b)
+{
+    return boost::algorithm::icontains (a, b, loc);
+}
+
+
+bool
+Strutil::icontains (const char *a, const char *b)
+{
+    return boost::algorithm::icontains (a, b, loc);
+}
+
+
 void
 Strutil::to_lower (std::string &a)
 {
@@ -445,7 +473,7 @@ Strutil::utf8_to_utf16 (const std::string& str)
     std::wstring native;
     
     native.resize(MultiByteToWideChar (CP_UTF8, 0, str.c_str(), -1, NULL, 0));
-    MultiByteToWideChar (CP_UTF8, 0, str.c_str(), -1, &native[0], native.size());
+    MultiByteToWideChar (CP_UTF8, 0, str.c_str(), -1, &native[0], (int)native.size());
 
     return native;
 }
@@ -458,11 +486,30 @@ Strutil::utf16_to_utf8 (const std::wstring& str)
     std::string utf8;
 
     utf8.resize(WideCharToMultiByte (CP_UTF8, 0, str.c_str(), -1, NULL, 0, NULL, NULL));
-    WideCharToMultiByte (CP_UTF8, 0, str.c_str(), -1, &utf8[0], utf8.size(), NULL, NULL);
+    WideCharToMultiByte (CP_UTF8, 0, str.c_str(), -1, &utf8[0], (int)utf8.size(), NULL, NULL);
 
     return utf8;
 }
 #endif
+
+
+
+char *
+Strutil::safe_strcpy (char *dst, const char *src, size_t size)
+{
+    if (src) {
+        for (size_t i = 0;  i < size;  ++i) {
+            if (! (dst[i] = src[i]))
+                return dst;   // finished, and copied the 0 character
+        }
+        // If we got here, we have gotten to the maximum length, and still
+        // no terminating 0, so add it!
+        dst[size-1] = 0;
+    } else {
+        dst[0] = 0;
+    }
+    return dst;
+}
 
 
 }

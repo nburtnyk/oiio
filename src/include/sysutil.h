@@ -41,6 +41,11 @@
 #define OPENIMAGEIO_SYSUTIL_H
 
 #include <string>
+#include <time.h>
+
+#ifdef __MINGW32__
+#include <malloc.h> // for alloca
+#endif
 
 #ifdef __MINGW32__
 #include <malloc.h> // for alloca
@@ -105,10 +110,16 @@ OIIO_NAMESPACE_ENTER
 namespace Sysutil {
 
 /// The amount of memory currently being used by this process, in bytes.
-/// By default, returns the full virtual arena, but if resident=true,
-/// it will report just the resident set in RAM.
-OIIO_API size_t memory_used (bool resident=false);
+/// If resident==true (the default), it will report just the resident
+/// set in RAM; if resident==false, it returns the full virtual arena
+/// (which can be misleading because gcc allocates quite a bit of
+/// virtual, but not actually resident until malloced, memory per
+/// thread).
+OIIO_API size_t memory_used (bool resident=true);
 
+/// The amount of physical RAM on this machine, in bytes.
+/// If it can't figure it out, it will return 0.
+OIIO_API size_t physical_memory ();
 
 /// Convert calendar time pointed by 'time' into local time and save it in
 /// 'converted_time' variable
@@ -134,7 +145,7 @@ OIIO_API int terminal_columns ();
 OIIO_API bool put_in_background (int argc, char* argv[]);
 
 
-};  // namespace Sysutils
+}  // namespace Sysutils
 
 }
 OIIO_NAMESPACE_EXIT

@@ -193,7 +193,7 @@ private:
         void *ptr = NULL;  // dummy -- expect it to stay NULL
         bool ok = TIFFGetField (m_tif, tag, dest, &ptr);
         if (ptr) {
-#ifdef DEBUG
+#ifndef NDEBUG
             std::cerr << "Error safe_tiffgetfield : did not expect ptr set on "
                       << name << " " << (void *)ptr << "\n";
 #endif
@@ -741,7 +741,8 @@ TIFFInput::readspec (bool read_meta)
                 // This is the alpha channel, but color is unassociated
                 m_spec.alpha_channel = c;
                 alpha_is_unassociated = true;
-                m_spec.attribute ("oiio:UnassociatedAlpha", 1);
+                if (m_keep_unassociated_alpha)
+                    m_spec.attribute ("oiio:UnassociatedAlpha", 1);
             } else {
                 DASSERT (sampleinfo[i] == EXTRASAMPLE_UNSPECIFIED);
                 // This extra channel is not alpha at all.  Undo any
