@@ -114,9 +114,9 @@ private:
     ///
     dpx::Characteristic get_characteristic_from_string (const std::string &str);
 
-    /// Helper function - retrieve libdpx descriptor for string
-    ///
-    dpx::Descriptor get_descriptor_from_string (const std::string &str);
+    /// Helper function - retrieve libdpx descriptor given nchannels and
+    /// the channel names.
+    dpx::Descriptor get_image_descriptor ();
 
     /// Helper function - set keycode values from int array
     ///
@@ -232,6 +232,7 @@ DPXOutput::open (const std::string &name, const ImageSpec &userspec,
     }
 
     // some metadata
+    std::string software = m_spec.get_string_attribute ("Software", "");
     std::string project = m_spec.get_string_attribute ("DocumentName", "");
     std::string copyright = m_spec.get_string_attribute ("Copyright", "");
     std::string datestr = m_spec.get_string_attribute ("DateTime", "");
@@ -251,12 +252,12 @@ DPXOutput::open (const std::string &name, const ImageSpec &userspec,
     std::string endian = m_spec.get_string_attribute ("oiio:Endian", littleendian() ? "little" : "big");
     m_wantSwap = (littleendian() != Strutil::iequals (endian, "little"));
 
-    m_dpx.SetFileInfo (name.c_str (),                       // filename
-        datestr.c_str (),                                   // cr. date
-        OIIO_INTRO_STRING,                                  // creator
-        project.empty () ? NULL : project.c_str (),         // project
-        copyright.empty () ? NULL : copyright.c_str (),     // copyright
-        m_spec.get_int_attribute ("dpx:EncryptKey", ~0),    // encryption key
+    m_dpx.SetFileInfo (name.c_str (),                               // filename
+        datestr.c_str (),                                           // cr. date
+        software.empty () ? OIIO_INTRO_STRING : software.c_str (),  // creator
+        project.empty () ? NULL : project.c_str (),                 // project
+        copyright.empty () ? NULL : copyright.c_str (),             // copyright
+        m_spec.get_int_attribute ("dpx:EncryptKey", ~0),            // encryption key
         m_wantSwap);
 
     // image info
@@ -346,8 +347,8 @@ DPXOutput::open (const std::string &name, const ImageSpec &userspec,
 
     static int DpxOrientations[] = { 0,
         dpx::kLeftToRightTopToBottom, dpx::kRightToLeftTopToBottom,
-        dpx::kLeftToRightBottomToTop, dpx::kRightToLeftBottomToTop, 
-        dpx::kTopToBottomLeftToRight, dpx::kTopToBottomRightToLeft, 
+        dpx::kLeftToRightBottomToTop, dpx::kRightToLeftBottomToTop,
+        dpx::kTopToBottomLeftToRight, dpx::kTopToBottomRightToLeft,
         dpx::kBottomToTopLeftToRight, dpx::kBottomToTopRightToLeft };
     int orient = m_spec.get_int_attribute ("Orientation", 0);
     orient = DpxOrientations[clamp (orient, 0, 8)];
@@ -391,7 +392,7 @@ DPXOutput::open (const std::string &name, const ImageSpec &userspec,
         srcdate.replace (19, -1, "Z");
         m_dpx.header.SetSourceTimeDate (srcdate.c_str ());
     }
-    
+
     // commit!
     if (!m_dpx.WriteHeader ()) {
         error ("Failed to write DPX header");
@@ -424,8 +425,7 @@ DPXOutput::prep_subimage (int s, bool allocate)
     m_spec = m_subimage_specs[s];  // stash the spec
 
     // determine descriptor
-    m_desc = get_descriptor_from_string
-        (m_spec.get_string_attribute ("dpx:ImageDescriptor", ""));
+    m_desc = get_image_descriptor();
 
     // transfer function
     std::string colorspace = m_spec.get_string_attribute ("oiio:ColorSpace", "");
@@ -437,7 +437,7 @@ DPXOutput::prep_subimage (int s, bool allocate)
         std::string dpxtransfer = m_spec.get_string_attribute ("dpx:Transfer", "");
         m_transfer = get_characteristic_from_string (dpxtransfer);
     }
-    
+
     // colorimetric
     m_cmetr = get_characteristic_from_string
         (m_spec.get_string_attribute ("dpx:Colorimetric", "User defined"));
@@ -487,7 +487,7 @@ DPXOutput::prep_subimage (int s, bool allocate)
 
     // check if the client is giving us raw data to write
     m_wantRaw = m_spec.get_int_attribute ("dpx:RawData", 0) != 0;
-    
+
     // see if we'll need to convert or not
     if (m_desc == dpx::kRGB || m_desc == dpx::kRGBA) {
         // shortcut for RGB(A) that gets the job done
@@ -538,7 +538,7 @@ DPXOutput::close ()
         ok &= write_buffer ();
         m_dpx.Finish ();
     }
-        
+
     init();  // Reset to initial state
     return ok;
 }
@@ -609,62 +609,36 @@ DPXOutput::get_characteristic_from_string (const std::string &str)
 
 
 dpx::Descriptor
-DPXOutput::get_descriptor_from_string (const std::string &str)
+DPXOutput::get_image_descriptor ()
 {
-    if (str.empty ()) {
-        // try to guess based on the image spec
-        // FIXME: make this more robust (that is, if someone complains)
-        switch (m_spec.nchannels) {
-            case 1:
-                return dpx::kLuma;
-            case 3:
-                return dpx::kRGB;
-            case 4:
-                return dpx::kRGBA;
-            default:
-                if (m_spec.nchannels <= 8)
-                    return (dpx::Descriptor)((int)dpx::kUserDefined2Comp
-                        + m_spec.nchannels - 2);
-                return dpx::kUndefinedDescriptor;
+    switch (m_spec.nchannels) {
+    case 1:
+        {
+        std::string name = m_spec.channelnames.size() ? m_spec.channelnames[0] : "";
+        if (m_spec.z_channel == 0 || name == "Z")
+            return dpx::kDepth;
+        else if (m_spec.alpha_channel == 0 || name == "A")
+            return dpx::kAlpha;
+        else if (name == "R")
+            return dpx::kRed;
+        else if (name == "B")
+            return dpx::kBlue;
+        else if (name == "G")
+            return dpx::kGreen;
+        else
+            return dpx::kLuma;
         }
-    } else if (Strutil::iequals (str, "User defined")) {
-        if (m_spec.nchannels >= 2 && m_spec.nchannels <= 8)
-            return (dpx::Descriptor)((int)dpx::kUserDefined2Comp
-                + m_spec.nchannels - 2);
-        return dpx::kUserDefinedDescriptor;
-    } else if (Strutil::iequals (str, "Red"))
-        return dpx::kRed;
-    else if (Strutil::iequals (str, "Green"))
-        return dpx::kGreen;
-    else if (Strutil::iequals (str, "Blue"))
-        return dpx::kBlue;
-    else if (Strutil::iequals (str, "Alpha"))
-        return dpx::kAlpha;
-    else if (Strutil::iequals (str, "Luma"))
-        return dpx::kLuma;
-    else if (Strutil::iequals (str, "Color difference"))
-        return dpx::kColorDifference;
-    else if (Strutil::iequals (str, "Depth"))
-        return dpx::kDepth;
-    else if (Strutil::iequals (str, "Composite video"))
-        return dpx::kCompositeVideo;
-    else if (Strutil::iequals (str, "RGB"))
+    case 3:
         return dpx::kRGB;
-    else if (Strutil::iequals (str, "RGBA"))
+    case 4:
         return dpx::kRGBA;
-    else if (Strutil::iequals (str, "ABGR"))
-        return dpx::kABGR;
-    else if (Strutil::iequals (str, "CbYCrY"))
-        return dpx::kCbYCrY;
-    else if (Strutil::iequals (str, "CbYACrYA"))
-        return dpx::kCbYACrYA;
-    else if (Strutil::iequals (str, "CbYCr"))
-        return dpx::kCbYCr;
-    else if (Strutil::iequals (str, "CbYCrA"))
-        return dpx::kCbYCrA;
-    //else if (Strutil::iequals (str, "Undefined"))
+    default:
+        if (m_spec.nchannels <= 8)
+            return (dpx::Descriptor)((int)dpx::kUserDefined2Comp + m_spec.nchannels - 2);
         return dpx::kUndefinedDescriptor;
+    }
 }
+
 
 
 void

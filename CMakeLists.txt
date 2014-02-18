@@ -3,7 +3,7 @@ project (OpenImageIO)
 # Release version of the library
 set (OIIO_VERSION_MAJOR 1)
 set (OIIO_VERSION_MINOR 3)
-set (OIIO_VERSION_PATCH 9)
+set (OIIO_VERSION_PATCH 12)
 set (OIIO_VERSION_RELEASE_TYPE "")   # "dev", "betaX", "RCY", ""
 
 cmake_minimum_required (VERSION 2.6)
@@ -70,6 +70,11 @@ if (CMAKE_COMPILER_IS_CLANG)
     add_definitions ("-Wno-overloaded-virtual")
     # disable warning about unused command line arguments
     add_definitions ("-Qunused-arguments")
+endif ()
+
+if (CMAKE_COMPILER_IS_GNUCC AND (NOT ${GCC_VERSION} VERSION_LESS 4.8))
+    # suppress a warning that Boost::Python hits in g++ 4.8
+    add_definitions ("-Wno-error=unused-local-typedefs")
 endif ()
 
 if (CMAKE_COMPILER_IS_CLANG OR CMAKE_COMPILER_IS_GNUCC)

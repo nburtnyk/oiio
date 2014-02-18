@@ -51,7 +51,6 @@
 #include <OpenEXR/ImfMatrixAttribute.h>
 #include <OpenEXR/ImfVecAttribute.h>
 #include <OpenEXR/ImfStringAttribute.h>
-#include <OpenEXR/ImfStringVectorAttribute.h>
 #include <OpenEXR/ImfTimeCodeAttribute.h>
 #include <OpenEXR/ImfKeyCodeAttribute.h>
 #include <OpenEXR/ImfBoxAttribute.h>
@@ -69,6 +68,7 @@
 #define OPENEXR_VERSION_IS_1_6_OR_LATER
 #endif
 #ifdef USE_OPENEXR_VERSION2
+#include <OpenEXR/ImfStringVectorAttribute.h>
 #include <OpenEXR/ImfMultiPartOutputFile.h>
 #include <OpenEXR/ImfPartType.h>
 #include <OpenEXR/ImfOutputPart.h>
@@ -204,7 +204,7 @@ private:
 
     // Set up the header based on the given spec.  Also may doctor the 
     // spec a bit.
-    bool spec_to_header (ImageSpec &spec, Imf::Header &header);
+    bool spec_to_header (ImageSpec &spec, int subimage, Imf::Header &header);
 
     // Add a parameter to the output
     static bool put_parameter (const std::string &name, TypeDesc type,
@@ -230,7 +230,7 @@ openexr_output_imageio_create ()
 OIIO_EXPORT int openexr_imageio_version = OIIO_PLUGIN_VERSION;
 
 OIIO_EXPORT const char * openexr_output_extensions[] = {
-    "exr", NULL
+    "exr", "sxr", "mxr", NULL
 };
 
 OIIO_PLUGIN_EXPORTS_END
@@ -327,7 +327,7 @@ OpenEXROutput::open (const std::string &name, const ImageSpec &userspec,
         m_headers.resize (1);
         m_spec = userspec;  // Stash the spec
 
-        if (! spec_to_header (m_spec, m_headers[m_subimage]))
+        if (! spec_to_header (m_spec, m_subimage, m_headers[m_subimage]))
             return false;
 
         try {
@@ -464,7 +464,7 @@ OpenEXROutput::open (const std::string &name, int subimages,
         filetype = specs[0].tile_width ? "tiledimage" : "scanlineimage";
     bool deep = false;
     for (int s = 0;  s < subimages;  ++s) {
-        if (! spec_to_header (m_subimagespecs[s], m_headers[s]))
+        if (! spec_to_header (m_subimagespecs[s], s, m_headers[s]))
             return false;
         deep |= m_subimagespecs[s].deep;
         if (m_subimagespecs[s].deep != m_subimagespecs[0].deep) {
@@ -540,7 +540,7 @@ OpenEXROutput::open (const std::string &name, int subimages,
 
 
 bool
-OpenEXROutput::spec_to_header (ImageSpec &spec, Imf::Header &header)
+OpenEXROutput::spec_to_header (ImageSpec &spec, int subimage, Imf::Header &header)
 {
     if (spec.width < 1 || spec.height < 1) {
         error ("Image resolution must be at least 1x1, you asked for %d x %d",
@@ -675,6 +675,15 @@ OpenEXROutput::spec_to_header (ImageSpec &spec, Imf::Header &header)
                        spec.extra_attribs[p].type(),
                        spec.extra_attribs[p].data(), header);
 
+#ifdef USE_OPENEXR_VERSION2
+    // Multi-part EXR files required to have a name. Make one up if not
+    // supplied.
+    if (m_nsubimages > 1 && ! header.hasName()) {
+        std::string n = Strutil::format ("subimage%02d", subimage);
+        header.insert ("name", Imf::StringAttribute (n));
+    }
+#endif
+
     return true;
 }
 
@@ -746,6 +755,8 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
         xname = "expTime";
     else if (Strutil::iequals(xname, "FNumber"))
         xname = "aperture";
+    else if (Strutil::iequals(xname, "name"))
+        xname = "oiio::subimagename";
     else if (Strutil::istarts_with (xname, format_prefix))
         xname = std::string (xname.begin()+format_prefix.size(), xname.end());
 
@@ -881,6 +892,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::FLOAT:
                     header.insert (xname.c_str(), Imf::V2fAttribute (*(Imath::V2f*)data));
                     return true;
+#ifdef USE_OPENEXR_VERSION2
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::V2dAttribute (*(Imath::V2d*)data));
                     return true;
@@ -890,6 +902,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                     v.push_back(((std::string*)data)[1]);
                     header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
                     return true;
+#endif
             }
         }
         if (type.aggregate == TypeDesc::VEC3) {
@@ -902,6 +915,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::FLOAT:
                     header.insert (xname.c_str(), Imf::V3fAttribute (*(Imath::V3f*)data));
                     return true;
+#ifdef USE_OPENEXR_VERSION2
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::V3dAttribute (*(Imath::V3d*)data));
                     return true;
@@ -912,6 +926,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                     v.push_back(((std::string*)data)[2]);
                     header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
                     return true;
+#endif
             }
         }
         if (type.aggregate == TypeDesc::MATRIX44) {
@@ -919,9 +934,11 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::FLOAT:
                     header.insert (xname.c_str(), Imf::M44fAttribute (*(Imath::M44f*)data));
                     return true;
+#ifdef USE_OPENEXR_VERSION2
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::M44dAttribute (*(Imath::M44d*)data));
                     return true;
+#endif
             }
         }
     }
@@ -970,6 +987,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::FLOAT:
                     header.insert (xname.c_str(), Imf::V2fAttribute (*(Imath::V2f*)data));
                     return true;
+#ifdef USE_OPENEXR_VERSION2
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::V2dAttribute (*(Imath::V2d*)data));
                     return true;
@@ -979,6 +997,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                     v.push_back(((std::string*)data)[1]);
                     header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
                     return true;
+#endif
             }
         }
         // Vec3
@@ -992,6 +1011,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::FLOAT:
                     header.insert (xname.c_str(), Imf::V3fAttribute (*(Imath::V3f*)data));
                     return true;
+#ifdef USE_OPENEXR_VERSION2
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::V3dAttribute (*(Imath::V3d*)data));
                     return true;
@@ -1002,6 +1022,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                     v.push_back(((std::string*)data)[2]);
                     header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
                     return true;
+#endif
             }
         }
         // Matrix
@@ -1010,11 +1031,14 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::FLOAT:
                     header.insert (xname.c_str(), Imf::M44fAttribute (*(Imath::M44f*)data));
                     return true;
+#ifdef USE_OPENEXR_VERSION2
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::M44dAttribute (*(Imath::M44d*)data));
                     return true;
+#endif
             }
         }
+#ifdef USE_OPENEXR_VERSION2
         // String Vector
         else if (type.basetype == TypeDesc::STRING) {
             Imf::StringVector v;
@@ -1024,6 +1048,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
             header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
             return true;
         }
+#endif
     }
 
 
