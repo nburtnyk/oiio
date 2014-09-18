@@ -46,10 +46,6 @@
 #include <malloc.h> // for alloca
 #endif
 
-#ifdef __MINGW32__
-#include <malloc.h> // for alloca
-#endif
-
 #include "export.h"
 #include "oiioversion.h"
 #include "platform.h"
