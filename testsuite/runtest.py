@@ -235,7 +235,7 @@ def runtest (command, outputs, failureok=0) :
         # variants for different platforms, etc.
         for testfile in (["ref/"+out] + glob.glob (os.path.join ("ref", "*"+extension))) :
             # print ("comparing " + out + " to " + testfile)
-            if extension == ".tif" or extension == ".exr" or extension == ".jpg":
+            if extension == ".tif" or extension == ".exr" or extension == ".jpg" or extension == ".png":
                 # images -- use idiff
                 cmpcommand = diff_command (out, testfile, concat=False)
                 # print ("cmpcommand = " + cmpcommand)
@@ -271,5 +271,5 @@ with open("run.py") as f:
     exec (code)
 
 # Run the test and check the outputs
-ret = runtest (command, outputs)
+ret = runtest (command, outputs, failureok=failureok)
 sys.exit (ret)

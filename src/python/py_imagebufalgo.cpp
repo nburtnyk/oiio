@@ -28,7 +28,7 @@
   (This is the Modified BSD License)
 */
 
-#include "imagebufalgo.h"
+#include "OpenImageIO/imagebufalgo.h"
 #include "py_oiio.h"
 
 
@@ -223,6 +223,31 @@ IBA_mul_images (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
 
 
 bool
+IBA_pow_color (ImageBuf &dst, const ImageBuf &A, tuple values_tuple,
+               ROI roi=ROI::All(), int nthreads=0)
+{
+    std::vector<float> values;
+    py_to_stdvector (values, values_tuple);
+    if (roi.defined())
+        values.resize (roi.nchannels(), 0.0f);
+    else if (A.initialized())
+        values.resize (A.nchannels(), 0.0f);
+    else return false;
+    ASSERT (values.size() > 0);
+    return ImageBufAlgo::pow (dst, A, &values[0], roi, nthreads);
+}
+
+bool
+IBA_pow_float (ImageBuf &dst, const ImageBuf &A, float B,
+               ROI roi=ROI::All(), int nthreads=0)
+{
+    return ImageBufAlgo::pow (dst, A, B, roi, nthreads);
+}
+
+
+
+
+bool
 IBA_clamp (ImageBuf &dst, const ImageBuf &src,
            tuple min_, tuple max_,
            bool clampalpha01 = false,
@@ -315,13 +340,90 @@ bool IBA_unpremult (ImageBuf &dst, const ImageBuf &src,
 
 
 
+std::string
+IBA_computePixelHashSHA1 (const ImageBuf &src,
+                          const std::string &extrainfo = std::string(),
+                          ROI roi = ROI::All(),
+                          int blocksize = 0, int nthreads=0)
+{
+    return ImageBufAlgo::computePixelHashSHA1 (src, extrainfo, roi,
+                                               blocksize, nthreads);
+}
+
+
+
 bool
-IBA_resize (ImageBuf &dst, const ImageBuf &src,
-            const std::string &filter = "", float filterwidth = 0.0f,
+IBA_warp (ImageBuf &dst, const ImageBuf &src, tuple values_M,
+          const std::string &filtername = "", float filterwidth = 0.0f,
+          bool recompute_roi = false,
+          ImageBuf::WrapMode wrap = ImageBuf::WrapDefault,
+          ROI roi=ROI::All(), int nthreads=0)
+{
+    std::vector<float> M;
+    py_to_stdvector (M, values_M);
+    if (M.size() != 9)
+        return false;
+    return ImageBufAlgo::warp (dst, src, *(Imath::M33f *)&M[0],
+                               filtername, filterwidth, recompute_roi, wrap,
+                               roi, nthreads);
+}
+
+
+
+bool
+IBA_rotate (ImageBuf &dst, const ImageBuf &src, float angle,
+            const std::string &filtername = "", float filterwidth = 0.0f,
+            bool recompute_roi = false,
             ROI roi=ROI::All(), int nthreads=0)
 {
-    return ImageBufAlgo::resize (dst, src, filter, filterwidth,
+    return ImageBufAlgo::rotate (dst, src, angle, filtername, filterwidth,
+                                 recompute_roi, roi, nthreads);
+}
+
+
+
+bool
+IBA_rotate2 (ImageBuf &dst, const ImageBuf &src, float angle,
+             float center_x, float center_y,
+             const std::string &filtername = "", float filterwidth = 0.0f,
+             bool recompute_roi = false,
+             ROI roi=ROI::All(), int nthreads=0)
+{
+    return ImageBufAlgo::rotate (dst, src, angle, center_x, center_y,
+                                 filtername, filterwidth, recompute_roi,
                                  roi, nthreads);
+}
+
+
+
+bool
+IBA_resize (ImageBuf &dst, const ImageBuf &src,
+            const std::string &filtername = "", float filterwidth = 0.0f,
+            ROI roi=ROI::All(), int nthreads=0)
+{
+    return ImageBufAlgo::resize (dst, src, filtername, filterwidth,
+                                 roi, nthreads);
+}
+
+
+
+bool
+IBA_make_kernel (ImageBuf &dst, const std::string &name,
+                 float width, float height, float depth, bool normalize)
+{
+    return ImageBufAlgo::make_kernel (dst, name, width, height, depth,
+                                      normalize);
+}
+
+
+
+bool
+IBA_unsharp_mask (ImageBuf &dst, const ImageBuf &src,
+                  const std::string &kernel, float width,
+                  float contrast, float threshold, ROI roi, int nthreads)
+{
+    return ImageBufAlgo::unsharp_mask (dst, src, kernel, width,
+                                       contrast, threshold, roi, nthreads);
 }
 
 
@@ -531,11 +633,31 @@ void declare_imagebufalgo()
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("crop")
 
+        .def("cut", &ImageBufAlgo::cut,
+             (arg("dst"), arg("src"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("cut")
+
         .def("paste", &ImageBufAlgo::paste,
              (arg("dst"), arg("xbegin"), arg("ybegin"), arg("zbegin"),
               arg("chbegin"), arg("src"),
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("paste")
+
+        .def("rotate90", &ImageBufAlgo::rotate90,
+             (arg("dst"), arg("src"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("rotate90")
+
+        .def("rotate180", &ImageBufAlgo::rotate180,
+             (arg("dst"), arg("src"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("rotate180")
+
+        .def("rotate270", &ImageBufAlgo::rotate270,
+             (arg("dst"), arg("src"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("rotate270")
 
         .def("flip", &ImageBufAlgo::flip,
              (arg("dst"), arg("src"),
@@ -547,10 +669,14 @@ void declare_imagebufalgo()
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("flop")
 
-        .def("flipflop", &ImageBufAlgo::flipflop,
+        .def("flipflop", &ImageBufAlgo::rotate180,
              (arg("dst"), arg("src"),
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("flipflop")
+
+        .def("reorient", &ImageBufAlgo::reorient,
+             (arg("dst"), arg("src"), arg("nthreads")=0))
+        .staticmethod("reorient")
 
         .def("transpose", &ImageBufAlgo::transpose,
              (arg("dst"), arg("src"),
@@ -595,6 +721,14 @@ void declare_imagebufalgo()
              (arg("dst"), arg("A"), arg("B"),
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("mul")
+
+        .def("pow", &IBA_pow_float,
+             (arg("dst"), arg("A"), arg("B"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .def("pow", &IBA_pow_color,
+             (arg("dst"), arg("A"), arg("B"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("pow")
 
         .def("channel_sum", &IBA_channel_sum,
              (arg("dst"), arg("src"),
@@ -692,13 +826,33 @@ void declare_imagebufalgo()
              (arg("src"), arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("nonzero_region")
 
-        .def("computePixelHashSHA1", &ImageBufAlgo::computePixelHashSHA1,
+        .def("computePixelHashSHA1", &IBA_computePixelHashSHA1,
              (arg("src"), arg("extrainfo")="", arg("roi")=ROI::All(),
               arg("blocksize")=0, arg("nthreads")=0))
         .staticmethod("computePixelHashSHA1")
 
+        .def("warp", &IBA_warp,
+             (arg("dst"), arg("src"), arg("M"),
+              arg("filtername")="", arg("filterwidth")=0.0f,
+              arg("recompute_roi")=false, arg("wrap")=ImageBuf::WrapDefault,
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("warp")
+
+        .def("rotate", &IBA_rotate,
+             (arg("dst"), arg("src"), arg("angle"),
+              arg("filtername")="", arg("filterwidth")=0.0f,
+              arg("recompute_roi")=false,
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .def("rotate", &IBA_rotate2,
+             (arg("dst"), arg("src"), arg("angle"),
+              arg("center_x"), arg("center_y"),
+              arg("filtername")="", arg("filterwidth")=0.0f,
+              arg("recompute_roi")=false,
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("rotate")
+
         .def("resize", &IBA_resize,
-             (arg("dst"), arg("src"), arg("filername")="",
+             (arg("dst"), arg("src"), arg("filtername")="",
               arg("filterwidth")=0.0f, arg("roi")=ROI::All(),
               arg("nthreads")=0))
         .staticmethod("resize")
@@ -708,7 +862,7 @@ void declare_imagebufalgo()
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("resample")
 
-        .def("make_kernel", &ImageBufAlgo::make_kernel,
+        .def("make_kernel", &IBA_make_kernel,
              (arg("dst"), arg("name"), arg("width"), arg("height"),
               arg("depth")=1.0f, arg("normalize")=true))
         .staticmethod("make_kernel")
@@ -718,12 +872,18 @@ void declare_imagebufalgo()
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("convolve")
 
-        .def("unsharp_mask", &ImageBufAlgo::unsharp_mask,
+        .def("unsharp_mask", &IBA_unsharp_mask,
              (arg("dst"), arg("src"), arg("kernel")="gaussian",
               arg("width")=3.0f, arg("contrast")=1.0f,
               arg("threshold")=0.0f,
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("unsharp_mask")
+
+        .def("median_filter", &ImageBufAlgo::median_filter,
+             (arg("dst"), arg("src"),
+              arg("width")=3, arg("height")=-1,
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("median_filter")
 
         .def("fft", &ImageBufAlgo::fft,
              (arg("dst"), arg("src"),
@@ -734,6 +894,16 @@ void declare_imagebufalgo()
              (arg("dst"), arg("src"),
               arg("roi")=ROI::All(), arg("nthreads")=0))
         .staticmethod("ifft")
+
+        .def("polar_to_complex", &ImageBufAlgo::polar_to_complex,
+             (arg("dst"), arg("src"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("polar_to_complex")
+
+        .def("complex_to_polar", &ImageBufAlgo::complex_to_polar,
+             (arg("dst"), arg("src"),
+              arg("roi")=ROI::All(), arg("nthreads")=0))
+        .staticmethod("complex_to_polar")
 
         .def("fixNonFinite", &IBA_fixNonFinite,
              (arg("dst"), arg("src"), 

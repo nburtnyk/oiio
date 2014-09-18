@@ -33,12 +33,12 @@
 #include <vector>
 #include <map>
 
-#include "export.h"
-#include "thread.h"
-#include "strutil.h"
-#include "dassert.h"
-
-#include "ustring.h"
+#include "OpenImageIO/export.h"
+#include "OpenImageIO/thread.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/ustring.h"
+#include "OpenImageIO/unordered_map_concurrent.h"
 
 #include <boost/unordered_map.hpp>
 
@@ -68,28 +68,57 @@ typedef null_lock<null_mutex> ustring_write_lock_t;
 #endif
 
 
-typedef boost::unordered_map <const char *, ustring::TableRep *, Strutil::StringHash, Strutil::StringEqual> UstringTable;
+#if defined(__i386__) && !defined(__clang__) && !defined(_MSC_VER)
+#if ((10000*__GNUC__ + 100*__GNUC_MINOR__ + __GNUC_PATCHLEVEL__) < 40300)
+// On a 32bit build using gcc4.2, make_unique() seg faults with the
+// concurrent map enabled, so turn it off. More recent gcc seems ok. That
+// old a gcc on 32 bit systems is a pretty rare combination, so we're not
+// going to sweat the lower performance of turning off the concurrent map
+// for that increasingly rare case.
+#define USE_CONCURRENT_MAP 0
+#endif
+#endif
+
+#ifndef USE_CONCURRENT_MAP
+#define USE_CONCURRENT_MAP 1
+#endif
+
+#if USE_CONCURRENT_MAP
+typedef unordered_map_concurrent <string_view, ustring::TableRep *, Strutil::StringHash, Strutil::StringEqual, 8> UstringTable;
+#else
+typedef boost::unordered_map <string_view, ustring::TableRep *, Strutil::StringHash, Strutil::StringEqual> UstringTable;
+#endif
 
 std::string ustring::empty_std_string ("");
 
 
 namespace { // anonymous
 
-static long long ustring_stats_memory = 0;
-static long long ustring_stats_constructed = 0;
-static long long ustring_stats_unique = 0;
+#if USE_CONCURRENT_MAP
+static OIIO_CACHE_ALIGN atomic_ll ustring_stats_memory;
+static OIIO_CACHE_ALIGN atomic_ll ustring_stats_constructed;
+static OIIO_CACHE_ALIGN atomic_ll ustring_stats_unique;
+#else
+static OIIO_CACHE_ALIGN long long ustring_stats_memory = 0;
+static OIIO_CACHE_ALIGN long long ustring_stats_constructed = 0;
+static OIIO_CACHE_ALIGN long long ustring_stats_unique = 0;
+#endif
 
+
+#if !USE_CONCURRENT_MAP
 // Wrap our static mutex in a function to guarantee it exists when we
 // need it, regardless of module initialization order.
 static ustring_mutex_t & ustring_mutex ()
 {
-    static ustring_mutex_t the_real_mutex;
+    static OIIO_CACHE_ALIGN ustring_mutex_t the_real_mutex;
     return the_real_mutex;
 }
+#endif
+
 
 static UstringTable & ustring_table ()
 {
-    static UstringTable table;
+    static OIIO_CACHE_ALIGN UstringTable table;
     return table;
 }
 
@@ -141,11 +170,12 @@ enum {libcpp_string__min_cap = (sizeof(libcpp_string__long) - 1)/sizeof(std::str
 
 
 
-ustring::TableRep::TableRep (const char *s, size_t len)
-    : hashed(Strutil::strhash(s))
+ustring::TableRep::TableRep (string_view strref)
+    : hashed(Strutil::strhash(strref))
 {
-    strcpy ((char *)c_str(), s);
-    length = len;
+    length = strref.length();
+    memcpy ((char *)c_str(), strref.data(), length);
+    ((char *)c_str())[length] = 0;
 
     // We don't want the internal 'std::string str' to redundantly store the
     // chars, along with our own allocation.  So we use our knowledge of the
@@ -165,10 +195,10 @@ ustring::TableRep::TableRep (const char *s, size_t len)
     //
     // See /usr/include/c++/VERSION/bits/basic_string.h for the details of
     // gcc's std::string implementation.
-    dummy_capacity = len;
+    dummy_capacity = length;
     dummy_refcount = 1;   // so it never frees
     *(const char **)&str = c_str();
-    DASSERT (str.c_str() == c_str() && str.size() == len);
+    DASSERT (str.c_str() == c_str() && str.size() == length);
     return;
 
 #elif defined(_LIBCPP_VERSION)
@@ -183,11 +213,11 @@ ustring::TableRep::TableRep (const char *s, size_t len)
     // as normal.  But if it's going to make a long string (we can tell from
     // the length), we construct it ourselves, forcing the pointer to point
     // to the charcters in the TableRep we allocated.
-    if (len >= libcpp_string__min_cap /* it'll be a "long string" */) {
-        ((libcpp_string__long *)&str)->__cap_ = libcpp_string__long_mask | (len+1);
-        ((libcpp_string__long *)&str)->__size_ = len;
+    if (length >= libcpp_string__min_cap /* it'll be a "long string" */) {
+        ((libcpp_string__long *)&str)->__cap_ = libcpp_string__long_mask | (length+1);
+        ((libcpp_string__long *)&str)->__size_ = length;
         ((libcpp_string__long *)&str)->__data_ = (char *)c_str();
-        DASSERT (str.c_str() == c_str() && str.size() == len);
+        DASSERT (str.c_str() == c_str() && str.size() == length);
         return;
     }
 #endif
@@ -196,7 +226,7 @@ ustring::TableRep::TableRep (const char *s, size_t len)
     // in double allocation for the chars.  If you care about that, do
     // something special for your platform, much like we did for gcc and
     // libc++ above. (Windows users, I'm talking to you.)
-    str = s;
+    str = strref;
 }
 
 
@@ -214,14 +244,64 @@ ustring::TableRep::~TableRep ()
 
 
 
+#if USE_CONCURRENT_MAP
+
 const char *
-ustring::make_unique (const char *str)
+ustring::make_unique (string_view strref)
 {
     UstringTable &table (ustring_table());
 
     // Eliminate NULLs
-    if (! str)
-        str = "";
+    if (! strref.data())
+        strref = string_view("", 0);
+
+    // Check the ustring table to see if this string already exists.  If so,
+    // use its canonical representation.
+    ustring_stats_constructed += 1;
+    {
+        ustring::TableRep *tr;
+        if (table.retrieve (strref, tr))
+            return tr->c_str();
+    }
+
+    // This string is not yet in the ustring table.  Create a new entry.
+    size_t len = strref.length();
+    size_t size = sizeof(ustring::TableRep) + len + 1;
+    ustring::TableRep *rep = (ustring::TableRep *) malloc (size);
+    new (rep) ustring::TableRep (strref);
+
+    // Lock the table and add the entry if it's not already there
+    const char *result = rep->c_str();
+    bool added = table.insert (string_view(result,len), rep);
+    if (added) {
+        if (result != rep->str.c_str())
+            size += len+1;  // chars are replicated
+        ustring_stats_unique += 1;
+        ustring_stats_memory += size;
+        return result;
+    } 
+
+    // Somebody else added this string to the table in that interval
+    // when we were unlocked and constructing the rep.  Don't use the
+    // new one!  Use the one in the table and disregard the one we
+    // speculatively built.
+    rep->~TableRep ();  // destructor
+    free (rep);         // because it was malloced
+    UstringTable::iterator found = table.find (strref);
+    return found->second->c_str();
+}
+
+
+#else
+
+const char *
+ustring::make_unique (string_view strref)
+{
+    UstringTable &table (ustring_table());
+
+    // Eliminate NULLs
+    if (! strref.data())
+        strref = string_view("", 0);
 
     // Check the ustring table to see if this string already exists.  If so,
     // construct from its canonical representation.
@@ -233,7 +313,7 @@ ustring::make_unique (const char *str)
         const char *result = NULL;  // only non-NULL if it was found
         {
             ustring_read_lock_t read_lock (ustring_mutex());
-            UstringTable::const_iterator found = table.find (str);
+            UstringTable::const_iterator found = table.find (strref);
             if (found != table.end())
                 result = found->second->c_str();
         }
@@ -246,10 +326,10 @@ ustring::make_unique (const char *str)
     // This string is not yet in the ustring table.  Create a new entry.
     // Note that we are speculatively releasing the lock and building the
     // string locally.  Then we'll lock again to put it in the table.
-    size_t len = strlen(str);
+    size_t len = strref.length();
     size_t size = sizeof(ustring::TableRep) + len + 1;
     ustring::TableRep *rep = (ustring::TableRep *) malloc (size);
-    new (rep) ustring::TableRep (str, len);
+    new (rep) ustring::TableRep (strref);
 
     const char *result = rep->c_str(); // start assuming new one
     {
@@ -259,10 +339,10 @@ ustring::make_unique (const char *str)
         // constructing its rep, check the table one more time.  If it's
         // still empty, add it.
         ustring_write_lock_t write_lock (ustring_mutex());
-        UstringTable::const_iterator found = table.find (str);
+        UstringTable::const_iterator found = table.find (strref);
         if (found == table.end()) {
             // add the one we just created to the table
-            table[result] = rep;
+            table[string_view(result,len)] = rep;
             ++ustring_stats_unique;
             ustring_stats_memory += size;
             if (rep->c_str() != rep->str.c_str())
@@ -284,12 +364,16 @@ ustring::make_unique (const char *str)
     return result;
 }
 
+#endif
+
 
 
 std::string
 ustring::getstats (bool verbose)
 {
+#if ! USE_CONCURRENT_MAP
     ustring_read_lock_t read_lock (ustring_mutex());
+#endif
     std::ostringstream out;
     if (verbose) {
         out << "ustring statistics:\n";
@@ -310,10 +394,11 @@ ustring::getstats (bool verbose)
     int collisions = 0;
     int collision_max = 0;
     size_t most_common_hash = 0;
-    for (UstringTable::const_iterator s = table.begin(), e = table.end();
+    for (UstringTable::iterator s = table.begin(), e = table.end();
          s != e;  ++s) {
-        // Pretend the (const char *) in the string table is a ustring (it is!)
-        const ustring &us = *((ustring *)(&s->first));
+        // Pretend the string_view pointer in the table is a ustring (it is!)
+        const char *chars = s->first.data();
+        ustring us = *((ustring *)&chars);
         bool init = (hashes.find(us.hash()) == hashes.end());
         int &c (hashes[us.hash()]);  // Find/create the count for this hash
         if (init)
@@ -333,9 +418,10 @@ ustring::getstats (bool verbose)
     if (collision_max > 2) {
         out << (verbose ? "" : "\n") << "  Most common hash " 
             << most_common_hash << " was shared by:\n";
-        for (UstringTable::const_iterator s = table.begin(), e = table.end();
+        for (UstringTable::iterator s = table.begin(), e = table.end();
              s != e;  ++s) {
-            const ustring &us = *((ustring *)(&s->first));
+            const char *chars = s->first.data();
+            ustring us = *((ustring *)&chars);
             if (us.hash() == most_common_hash)
                 out << "      \"" << us << "\"\n";
         }
@@ -351,7 +437,9 @@ ustring::getstats (bool verbose)
 size_t
 ustring::memory ()
 {
+#if ! USE_CONCURRENT_MAP
     ustring_read_lock_t read_lock (ustring_mutex());
+#endif
     return ustring_stats_memory;
 }
 

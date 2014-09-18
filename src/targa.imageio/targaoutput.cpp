@@ -34,11 +34,11 @@
 
 #include "targa_pvt.h"
 
-#include "dassert.h"
-#include "typedesc.h"
-#include "strutil.h"
-#include "imageio.h"
-#include "fmath.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/fmath.h"
 
 OIIO_PLUGIN_NAMESPACE_BEGIN
 
@@ -59,6 +59,9 @@ public:
     virtual bool close ();
     virtual bool write_scanline (int y, int z, TypeDesc format,
                                  const void *data, stride_t xstride);
+    virtual bool write_tile (int x, int y, int z, TypeDesc format,
+                             const void *data, stride_t xstride,
+                             stride_t ystride, stride_t zstride);
 
 private:
     std::string m_filename;           ///< Stash the filename
@@ -68,6 +71,8 @@ private:
     float m_gamma;                    ///< Gamma to use for alpha conversion
     std::vector<unsigned char> m_scratch;
     int m_idlen;                      ///< Length of the TGA ID block
+    unsigned int m_dither;
+    std::vector<unsigned char> m_tilebuffer;
 
     // Initialize private members to pre-opened state
     void init (void) {
@@ -169,7 +174,6 @@ TGAOutput::open (const std::string &name, const ImageSpec &userspec,
 
     close ();  // Close any already-opened file
     m_spec = userspec;  // Stash the spec
-    m_spec.set_format (TypeDesc::UINT8);  // TARGA only supports 8 bits
 
     // Check for things this format doesn't support
     if (m_spec.width < 1 || m_spec.height < 1) {
@@ -198,6 +202,7 @@ TGAOutput::open (const std::string &name, const ImageSpec &userspec,
 
     // Force 8 bit integers
     m_spec.set_format (TypeDesc::UINT8);
+    m_dither = m_spec.get_int_attribute ("oiio:dither", 0);
 
     // check if the client wants the image to be run length encoded
     // currently only RGB RLE is supported
@@ -275,7 +280,6 @@ TGAOutput::open (const std::string &name, const ImageSpec &userspec,
         return false;
     }
 
-
     // dump comment to file, don't bother about null termination
     if (tga.idlen) {
         if (!fwrite(id.c_str(), tga.idlen)) {
@@ -283,6 +287,11 @@ TGAOutput::open (const std::string &name, const ImageSpec &userspec,
             return false;
         }
     }
+
+    // If user asked for tiles -- which this format doesn't support, emulate
+    // it by buffering the whole image.
+    if (m_spec.tile_width && m_spec.tile_height)
+        m_tilebuffer.resize (m_spec.image_bytes());
 
     return true;
 }
@@ -440,13 +449,23 @@ TGAOutput::write_tga20_data_fields ()
 bool
 TGAOutput::close ()
 {
-    bool ok = true;
-    if (m_file) {
-        ok &= write_tga20_data_fields ();
-        // close the stream
-        fclose (m_file);
-        m_file = NULL;
+    if (! m_file) {   // already closed
+        init ();
+        return true;
     }
+
+    bool ok = true;
+    if (m_spec.tile_width) {
+        // Handle tile emulation -- output the buffered pixels
+        ASSERT (m_tilebuffer.size());
+        ok &= write_scanlines (m_spec.y, m_spec.y+m_spec.height, 0,
+                               m_spec.format, &m_tilebuffer[0]);
+        std::vector<unsigned char>().swap (m_tilebuffer);
+    }
+
+    ok &= write_tga20_data_fields ();
+    fclose (m_file);  // close the stream
+    m_file = NULL;
 
     init ();      // re-initialize
     return ok;
@@ -543,7 +562,8 @@ TGAOutput::write_scanline (int y, int z, TypeDesc format,
 {
     y -= m_spec.y;
     m_spec.auto_stride (xstride, format, spec().nchannels);
-    data = to_native_scanline (format, data, xstride, m_scratch);
+    data = to_native_scanline (format, data, xstride, m_scratch,
+                               m_dither, y, z);
     if (m_scratch.empty() || data != &m_scratch[0]) {
         m_scratch.assign ((unsigned char *)data,
                           (unsigned char *)data+m_spec.scanline_bytes());
@@ -695,6 +715,19 @@ TGAOutput::write_scanline (int y, int z, TypeDesc format,
 
     return true;
 }
+
+
+
+bool
+TGAOutput::write_tile (int x, int y, int z, TypeDesc format,
+                       const void *data, stride_t xstride,
+                       stride_t ystride, stride_t zstride)
+{
+    // Emulate tiles by buffering the whole image
+    return copy_tile_to_image_buffer (x, y, z, format, data, xstride,
+                                      ystride, zstride, &m_tilebuffer[0]);
+}
+
 
 OIIO_PLUGIN_NAMESPACE_END
 

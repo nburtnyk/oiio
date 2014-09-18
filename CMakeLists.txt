@@ -2,9 +2,9 @@ project (OpenImageIO)
 
 # Release version of the library
 set (OIIO_VERSION_MAJOR 1)
-set (OIIO_VERSION_MINOR 3)
-set (OIIO_VERSION_PATCH 12)
-set (OIIO_VERSION_RELEASE_TYPE "")   # "dev", "betaX", "RCY", ""
+set (OIIO_VERSION_MINOR 5)
+set (OIIO_VERSION_PATCH 5)
+set (OIIO_VERSION_RELEASE_TYPE "dev")   # "dev", "betaX", "RCY", ""
 
 cmake_minimum_required (VERSION 2.6)
 if (NOT CMAKE_VERSION VERSION_LESS 2.8.4)
@@ -12,10 +12,6 @@ if (NOT CMAKE_VERSION VERSION_LESS 2.8.4)
 endif ()
 message (STATUS "Project source dir = ${PROJECT_SOURCE_DIR}")
 message (STATUS "Project build dir = ${CMAKE_BINARY_DIR}")
-
-if ("${PROJECT_SOURCE_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
-    message (FATAL_ERROR "Not allowed to run in-source build!")
-endif ()
 
 if (NOT CMAKE_BUILD_TYPE)
     set (CMAKE_BUILD_TYPE "Release")
@@ -42,10 +38,22 @@ if (CMAKE_COMPILER_IS_GNUCC)
                      OUTPUT_STRIP_TRAILING_WHITESPACE)
     message (STATUS "Using gcc ${GCC_VERSION} as the compiler")
 endif ()
+message (STATUS "CMAKE_CXX_COMPILER is ${CMAKE_CXX_COMPILER}")
 message (STATUS "CMAKE_CXX_COMPILER_ID is ${CMAKE_CXX_COMPILER_ID}")
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set (CMAKE_COMPILER_IS_CLANG 1)
     message (STATUS "Using clang as the compiler")
+endif ()
+# Second try: for earlier versions of CMake, the CMAKE_CXX_COMPILER_ID
+# appears to be unreliable and may say "GNU" despite using clang, so
+# directly match against the compiler name.
+if (CMAKE_CXX_COMPILER MATCHES "[Cc]lang")
+    set (CMAKE_COMPILER_IS_CLANG 1)
+    message (STATUS "The compiler seems to be clang")
+endif ()
+if (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
+    set (CMAKE_COMPILER_IS_INTEL 1)
+    message (STATUS "Using Intel as the compiler")
 endif ()
 
 ## turn on more detailed warnings and consider warnings as errors
@@ -61,6 +69,10 @@ if (CMAKE_COMPILER_IS_CLANG OR CMAKE_COMPILER_IS_GNUCC)
     # CMake doesn't automatically know what do do with
     # include_directories(SYSTEM...) when using clang or gcc.
     set (CMAKE_INCLUDE_SYSTEM_FLAG_CXX "-isystem ")
+    # Ensure this macro is set for stdint.h
+    add_definitions ("-D__STDC_LIMIT_MACROS")
+    # this allows native instructions to be used for sqrtf instead of a function call
+    add_definitions ("-fno-math-errno")
 endif ()
 
 if (CMAKE_COMPILER_IS_CLANG)
@@ -68,13 +80,18 @@ if (CMAKE_COMPILER_IS_CLANG)
     # to change just for the sake of having no warnings.
     add_definitions ("-Wno-unused-function")
     add_definitions ("-Wno-overloaded-virtual")
+    add_definitions ("-Wno-unneeded-internal-declaration")
+    add_definitions ("-Wno-unused-private-field")
     # disable warning about unused command line arguments
     add_definitions ("-Qunused-arguments")
+    # Don't warn if we ask it not to warn about warnings it doesn't know
+    add_definitions ("-Wunknown-warning-option")
 endif ()
 
-if (CMAKE_COMPILER_IS_GNUCC AND (NOT ${GCC_VERSION} VERSION_LESS 4.8))
+if (CMAKE_COMPILER_IS_GNUCC AND (NOT CMAKE_COMPILER_IS_CLANG) AND (NOT ${GCC_VERSION} VERSION_LESS 4.8))
     # suppress a warning that Boost::Python hits in g++ 4.8
     add_definitions ("-Wno-error=unused-local-typedefs")
+    add_definitions ("-Wunused-local-typedefs")
 endif ()
 
 if (CMAKE_COMPILER_IS_CLANG OR CMAKE_COMPILER_IS_GNUCC)
@@ -82,10 +99,10 @@ if (CMAKE_COMPILER_IS_CLANG OR CMAKE_COMPILER_IS_GNUCC)
         # Turn default symbol visibility to hidden
         set (VISIBILITY_COMMAND "-fvisibility=hidden -fvisibility-inlines-hidden")
         add_definitions (${VISIBILITY_COMMAND})
-        if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
-            # Linux: also hide all the symbols of dependent libraries to
-            # prevent clashes if an app using OIIO is linked against
-            # other verions of our dependencies.
+        if (CMAKE_SYSTEM_NAME MATCHES "Linux|kFreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "GNU")
+            # Linux/FreeBSD/Hurd: also hide all the symbols of dependent
+            # libraries to prevent clashes if an app using OIIO is linked
+            # against other verions of our dependencies.
             set (VISIBILITY_MAP_COMMAND "-Wl,--version-script=${PROJECT_SOURCE_DIR}/src/libOpenImageIO/libOpenImageIO.map")
         endif ()
     endif ()
@@ -102,7 +119,6 @@ set (HIDE_SYMBOLS OFF CACHE BOOL "Hide symbols not in the public API")
 set (USE_OPENGL ON CACHE BOOL "Include OpenGL support")
 set (USE_QT ON CACHE BOOL "Include Qt support")
 set (FORCE_OPENGL_1 OFF CACHE BOOL "Force iv to use OpenGL's fixed pipeline")
-set (USE_TBB OFF CACHE BOOL "Use TBB if needed")
 set (USE_PYTHON ON CACHE BOOL "Build the Python bindings")
 set (USE_FIELD3D ON CACHE BOOL "Use Field3D if found")
 set (USE_OPENJPEG ON CACHE BOOL "Use OpenJpeg if found")
@@ -111,19 +127,31 @@ set (USE_OPENCV ON CACHE BOOL "Use OpenCV if found")
 set (USE_OPENSSL ON CACHE BOOL "Use OpenSSL if found")
 set (USE_FREETYPE ON CACHE BOOL "Use Freetype if found")
 set (USE_GIF ON CACHE BOOL "Use GIF if found")
+set (USE_LIBRAW ON CACHE BOOL "Use LibRaw if found")
+set (LIBRAW_PATH "" CACHE STRING "Custom LibRaw path")
 set (NOTHREADS OFF CACHE BOOL "Compile with no threads or locking")
+set (OIIO_THREAD_ALLOW_DCLP ON CACHE BOOL "OIIO threads may use DCLP for speed")
 set (PYTHON_VERSION 2.6)
 set (USE_EXTERNAL_PUGIXML OFF CACHE BOOL
      "Use an externally built shared library version of the pugixml library")
 set (PUGIXML_HOME "" CACHE STRING "Hint about where to find external PugiXML library")
-set (USE_EXTERNAL_TBB OFF CACHE BOOL
-     "Use system TBB library instead of bundled.")
 
 set (SOVERSION ${OIIO_VERSION_MAJOR}.${OIIO_VERSION_MINOR}
      CACHE STRING "Set the SO version in the SO name of the output library")
 
 set (PYLIB_INCLUDE_SONAME OFF CACHE BOOL "If ON, soname/soversion will be set for Python module library")
 set (PYLIB_LIB_PREFIX OFF CACHE BOOL "If ON, prefix the Python module with 'lib'")
+set (BUILD_OIIOUTIL_ONLY OFF CACHE BOOL "If ON, will build *only* libOpenImageIO_Util")
+set (USE_CPP11 OFF CACHE BOOL "Compile in C++11 mode")
+set (USE_LIBCPLUSPLUS OFF CACHE BOOL "Compile with clang libc++")
+set (EXTRA_CPP_ARGS "" CACHE STRING "Extra C++ command line definitions")
+set (USE_SIMD "" CACHE STRING "Use SIMD directives (0, sse2, sse3, sse4.1, sse4.2)")
+
+if (BUILDSTATIC AND ${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+    # On Linux, the lack of -fPIC when building static libraries seems
+    # incompatible with the dynamic library needed for the Python bindings.
+    set (USE_PYTHON OFF)
+endif()
 
 if (NOTHREADS)
     message (STATUS "NO THREADS!")
@@ -131,30 +159,54 @@ if (NOTHREADS)
 else ()
     if (VERBOSE)
         message (STATUS "Building with thread support")
+        if (NOT OIIO_THREAD_ALLOW_DCLP)
+            add_definitions ("-DOIIO_THREAD_ALLOW_DCLP=0")
+        endif ()
     endif ()
 endif ()
 
-if (USE_TBB)
-    add_definitions ("-DUSE_TBB=1")
-else ()
-    add_definitions ("-DUSE_TBB=0")
-    message (STATUS "TBB will not be used")
-endif ()
-
-if (EXTRA_CPP_DEFINITIONS)
-    add_definitions ("${EXTRA_CPP_DEFINITIONS}")
+if (EXTRA_CPP_ARGS)
+    message (STATUS "Extra C++ args: ${EXTRA_CPP_ARGS}")
+    add_definitions ("${EXTRA_CPP_ARGS}")
 endif()
 
-set(CMAKE_MODULE_PATH
-    "${PROJECT_SOURCE_DIR}/src/cmake/modules"
-    "${PROJECT_SOURCE_DIR}/src/cmake")
+if (USE_CPP11)
+    message (STATUS "Building for C++11")
+    add_definitions ("-std=c++11")
+    if (CMAKE_COMPILER_IS_CLANG)
+        # C++11 doesn't like 'register' keyword, which is in Qt headers
+        add_definitions ("-Wno-deprecated-register")
+    endif ()
+endif ()
+
+if (USE_LIBCPLUSPLUS AND CMAKE_COMPILER_IS_CLANG)
+    message (STATUS "Using libc++")
+    add_definitions ("-stdlib=libc++")
+endif ()
+
+if (NOT USE_SIMD STREQUAL "")
+    message (STATUS "Compiling with SIMD level ${USE_SIMD}")
+    if (USE_SIMD STREQUAL "0")
+        add_definitions ("-DOIIO_NO_SSE=1")
+    else ()
+        if (MSVC OR CMAKE_COMPILER_IS_INTEL)
+            add_definitions ("/arch:{USE_SIMD}")
+        else ()
+            add_definitions ("-m${USE_SIMD}")
+        endif ()
+    endif ()
+endif ()
+
+set (CMAKE_MODULE_PATH
+     "${PROJECT_SOURCE_DIR}/src/cmake/modules"
+     "${PROJECT_SOURCE_DIR}/src/cmake")
 
 # Set the default namespace
-if(NOT OIIO_NAMESPACE)
-  set(OIIO_NAMESPACE OpenImageIO CACHE STRING
-      "Specify the master OpenImageIO C++ namespace: Options include OpenImageIO OpenImageIO_<YOURFACILITY> etc."
-      FORCE)
-endif(NOT OIIO_NAMESPACE)
+if (NOT OIIO_NAMESPACE)
+    set (OIIO_NAMESPACE OpenImageIO CACHE STRING
+         "Specify the master OpenImageIO C++ namespace: Options include OpenImageIO OpenImageIO_<YOURFACILITY> etc."
+         FORCE)
+endif ()
 
 message(STATUS "Setting Namespace to: ${OIIO_NAMESPACE}")
 
@@ -166,8 +218,8 @@ include (externalpackages)
 
 
 include_directories(
-    "${CMAKE_SOURCE_DIR}/src/include/"
-    "${CMAKE_BINARY_DIR}/include/"
+    "${CMAKE_SOURCE_DIR}/src/include"
+    "${CMAKE_BINARY_DIR}/include/OpenImageIO"
 )
 
 
@@ -182,7 +234,7 @@ if (UNIX AND NOT SELF_CONTAINED_INSTALL_TREE)
     # the "standard" unix directory heirarchy
     # TODO: Figure out how to get the correct python directory
     set (DEFAULT_PYLIB_INSTALL_DIR "lib/python/site-packages")
-    set (DEFAULT_DOC_INSTALL_DIR "share/doc/openimageio")
+    set (DEFAULT_DOC_INSTALL_DIR "share/doc/OpenImageIO")
     set (DEFAULT_MAN_INSTALL_DIR "share/man/man1")
 else ()
     # Here is the "self-contained install tree" case: the expectation here is
@@ -260,9 +312,13 @@ include (CTest)
 
 
 # Tell CMake to process the sub-directories
-add_subdirectory (src/libOpenImageIO)
+add_subdirectory (src/libutil)
 
-if (OIIO_BUILD_TOOLS)
+if (NOT BUILD_OIIOUTIL_ONLY)
+    add_subdirectory (src/libOpenImageIO)
+endif ()
+
+if (OIIO_BUILD_TOOLS AND NOT BUILD_OIIOUTIL_ONLY)
   add_subdirectory (src/iconvert)
   add_subdirectory (src/idiff)
   add_subdirectory (src/igrep)
@@ -292,6 +348,7 @@ if (NOT EMBEDPLUGINS)
     add_subdirectory (src/pnm.imageio)
     add_subdirectory (src/psd.imageio)
     add_subdirectory (src/ptex.imageio)
+    add_subdirectory (src/raw.imageio)
     add_subdirectory (src/rla.imageio)
     add_subdirectory (src/sgi.imageio)
     add_subdirectory (src/socket.imageio)
@@ -302,7 +359,7 @@ if (NOT EMBEDPLUGINS)
     add_subdirectory (src/zfile.imageio)
 endif ()
 
-if (USE_PYTHON AND oiio_boost_PYTHON_FOUND)
+if (USE_PYTHON AND oiio_boost_PYTHON_FOUND AND NOT BUILD_OIIOUTIL_ONLY)
     add_subdirectory (src/python)
 endif ()
 
@@ -337,15 +394,16 @@ endif()
 
 # List all the individual testsuite tests here:
 oiio_add_tests (gpsread misnamed-file nonwhole-tiles
-                oiiotool oiiotool-composite oiiotool-fixnan 
-                perchannel
-                dpx gif ico png psd rla sgi
+                oiiotool oiiotool-composite oiiotool-fixnan
+                oiiotool-readerror oiiotool-text
+                perchannel dither
+                dpx ico iff png psd rla sgi
                 python-typedesc python-imagespec python-roi
                 python-imageinput python-imageoutput
                 python-imagebuf python-imagebufalgo
                 maketx
                 texture-blurtube texture-crop texture-cropover
-                texture-fill texture-filtersize
+                texture-derivs texture-fill texture-filtersize
                 texture-gray texture-grid
                 texture-missing texture-overscan
                 texture-pointsample texture-width0blur texture-res
@@ -370,10 +428,19 @@ oiio_add_tests (openexr-suite openexr-multires openexr-chroma openexr-v2
     IMAGEDIR openexr-images
     URL http://www.openexr.com/downloads.html)
 
+oiio_add_tests (gif
+    FOUNDVAR GIF_FOUND
+    IMAGEDIR oiio-images
+    URL "Recent checkout of oiio-images")
+
 oiio_add_tests (jpeg2000
     FOUNDVAR OPENJPEG_FOUND
     IMAGEDIR j2kp4files_v1_5
     URL http://www.itu.int/net/ITU-T/sigdb/speimage/ImageForm-s.aspx?val=10100803)
+
+oiio_add_tests (pnm
+    IMAGEDIR oiio-images/pnm
+    URL "Recent checkout of oiio-images")
 
 oiio_add_tests (targa-tgautils
     IMAGEDIR TGAUTILS
@@ -412,12 +479,13 @@ set (CPACK_PACKAGE_DESCRIPTION_SUMMARY "OpenImageIO is an open source library fo
 set (CPACK_PACKAGE_DESCRIPTION_FILE "${PROJECT_SOURCE_DIR}/src/doc/Description.txt")
 set (CPACK_PACKAGE_FILE_NAME OpenImageIO-${OIIO_VERSION_MAJOR}.${OIIO_VERSION_MINOR}.${OIIO_VERSION_PATCH}-${platform})
 #SET (CPACK_PACKAGE_INSTALL_DIRECTORY "${PROJECT_SOURCE_DIR}")
-file (COPY "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION "${CMAKE_BINARY_DIR}")
-file (RENAME "${CMAKE_BINARY_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/License.txt")
-set (CPACK_RESOURCE_FILE_LICENSE "${CMAKE_BINARY_DIR}/License.txt")
-file (COPY "${PROJECT_SOURCE_DIR}/README.rst" DESTINATION "${CMAKE_BINARY_DIR}")
-file (RENAME "${CMAKE_BINARY_DIR}/README.rst" "${CMAKE_BINARY_DIR}/Readme.rst")
-set (CPACK_RESOURCE_FILE_README "${CMAKE_BINARY_DIR}/Readme.rst")
+file (MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/cpack")
+file (COPY "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION "${CMAKE_BINARY_DIR}/cpack")
+file (RENAME "${CMAKE_BINARY_DIR}/cpack/LICENSE" "${CMAKE_BINARY_DIR}/cpack/License.txt")
+set (CPACK_RESOURCE_FILE_LICENSE "${CMAKE_BINARY_DIR}/cpack/License.txt")
+file (COPY "${PROJECT_SOURCE_DIR}/README.rst" DESTINATION "${CMAKE_BINARY_DIR}/cpack")
+file (RENAME "${CMAKE_BINARY_DIR}/cpack/README.rst" "${CMAKE_BINARY_DIR}/cpack/Readme.rst")
+set (CPACK_RESOURCE_FILE_README "${CMAKE_BINARY_DIR}/cpack/Readme.rst")
 set (CPACK_RESOURCE_FILE_WELCOME "${PROJECT_SOURCE_DIR}/src/doc/Welcome.txt")
 #SET (CPACK_STRIP_FILES Do we need this?)
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
@@ -433,7 +501,6 @@ if (WIN32)
     set(CPACK_PACKAGE_EXECUTABLES "iv" "iv - Image Viewer")
 #    set(CPACK_CREATE_DESCTOP_LINKS "iv" "iv - Image Viewer")
     set(CPACK_NSIS_MODIFY_PATH ON)
-    add_dll_files ()
     include (InstallRequiredSystemLibraries)
 endif ()
 set (CPACK_SOURCE_PACKAGE_FILE_NAME OpenImageIO-${OIIO_VERSION_MAJOR}.${OIIO_VERSION_MINOR}.${OIIO_VERSION_PATCH}-source)

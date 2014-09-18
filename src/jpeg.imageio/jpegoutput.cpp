@@ -38,9 +38,9 @@ extern "C" {
 #include "jpeglib.h"
 }
 
-#include "imageio.h"
-#include "filesystem.h"
-#include "fmath.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/fmath.h"
 #include "jpeg_pvt.h"
 
 OIIO_PLUGIN_NAMESPACE_BEGIN
@@ -62,18 +62,23 @@ class JpgOutput : public ImageOutput {
                        OpenMode mode=Create);
     virtual bool write_scanline (int y, int z, TypeDesc format,
                                  const void *data, stride_t xstride);
+    virtual bool write_tile (int x, int y, int z, TypeDesc format,
+                             const void *data, stride_t xstride,
+                             stride_t ystride, stride_t zstride);
     virtual bool close ();
     virtual bool copy_image (ImageInput *in);
 
  private:
     FILE *m_fd;
     std::string m_filename;
+    unsigned int m_dither;
     int m_next_scanline;             // Which scanline is the next to write?
     std::vector<unsigned char> m_scratch;
     struct jpeg_compress_struct m_cinfo;
     struct jpeg_error_mgr c_jerr;
     jvirt_barray_ptr *m_copy_coeffs;
     struct jpeg_decompress_struct *m_copy_decompressor;
+    std::vector<unsigned char> m_tilebuffer;
 
     void init (void) {
         m_fd = NULL;
@@ -136,12 +141,6 @@ JpgOutput::open (const std::string &name, const ImageSpec &newspec,
         return false;
     }
 
-    int quality = 98;
-    const ImageIOParameter *qual = newspec.find_attribute ("CompressionQuality",
-                                                           TypeDesc::INT);
-    if (qual)
-        quality = * (const int *)qual->data();
-
     m_cinfo.err = jpeg_std_error (&c_jerr);             // set error handler
     jpeg_create_compress (&m_cinfo);                    // create compressor
     jpeg_stdio_dest (&m_cinfo, m_fd);                   // set output stream
@@ -172,6 +171,7 @@ JpgOutput::open (const std::string &name, const ImageSpec &newspec,
         // normal write of scanlines
         jpeg_set_defaults (&m_cinfo);                 // default compression
         DBG std::cout << "out open: set_defaults\n";
+        int quality = newspec.get_int_attribute ("CompressionQuality", 98);
         jpeg_set_quality (&m_cinfo, quality, TRUE);   // baseline values
         DBG std::cout << "out open: set_quality\n";
         jpeg_start_compress (&m_cinfo, TRUE);         // start working
@@ -234,6 +234,41 @@ JpgOutput::open (const std::string &name, const ImageSpec &newspec,
 
     m_spec.set_format (TypeDesc::UINT8);  // JPG is only 8 bit
 
+    // Write ICC profile, if we have anything
+    const ImageIOParameter* icc_profile_parameter = m_spec.find_attribute(ICC_PROFILE_ATTR);
+    if (icc_profile_parameter != NULL) {
+        unsigned char *icc_profile = (unsigned char*)icc_profile_parameter->data();
+        unsigned int icc_profile_length = icc_profile_parameter->type().size();
+        if (icc_profile && icc_profile_length){
+            /* Calculate the number of markers we'll need, rounding up of course */
+            int num_markers = icc_profile_length / MAX_DATA_BYTES_IN_MARKER;
+            if (num_markers * MAX_DATA_BYTES_IN_MARKER != icc_profile_length)
+                num_markers++;
+            int curr_marker = 1;  /* per spec, count strarts at 1*/
+            std::vector<unsigned char> profile (MAX_DATA_BYTES_IN_MARKER + ICC_HEADER_SIZE);
+            while (icc_profile_length > 0) {
+                // length of profile to put in this marker
+                unsigned int length = std::min (icc_profile_length, (unsigned int)MAX_DATA_BYTES_IN_MARKER);
+                icc_profile_length -= length;
+                // Write the JPEG marker header (APP2 code and marker length)
+                strcpy ((char *)&profile[0], "ICC_PROFILE");
+                profile[11] = 0;
+                profile[12] = curr_marker;
+                profile[13] = (unsigned char) num_markers;
+                memcpy(&profile[0] + ICC_HEADER_SIZE, icc_profile+length*(curr_marker-1), length);
+                jpeg_write_marker(&m_cinfo, JPEG_APP0 + 2, &profile[0], ICC_HEADER_SIZE+length);
+                curr_marker++;
+            }
+        }
+    }
+
+    m_dither = m_spec.get_int_attribute ("oiio:dither", 0);
+
+    // If user asked for tiles -- which JPEG doesn't support, emulate it by
+    // buffering the whole image.
+    if (m_spec.tile_width && m_spec.tile_height)
+        m_tilebuffer.resize (m_spec.image_bytes());
+
     return true;
 }
 
@@ -270,7 +305,8 @@ JpgOutput::write_scanline (int y, int z, TypeDesc format,
     int save_nchannels = m_spec.nchannels;
     m_spec.nchannels = m_cinfo.input_components;
 
-    data = to_native_scanline (format, data, xstride, m_scratch);
+    data = to_native_scanline (format, data, xstride, m_scratch,
+                               m_dither, y, z);
     m_spec.nchannels = save_nchannels;
 
     jpeg_write_scanlines (&m_cinfo, (JSAMPLE**)&data, 1);
@@ -282,10 +318,34 @@ JpgOutput::write_scanline (int y, int z, TypeDesc format,
 
 
 bool
+JpgOutput::write_tile (int x, int y, int z, TypeDesc format,
+                       const void *data, stride_t xstride,
+                       stride_t ystride, stride_t zstride)
+{
+    // Emulate tiles by buffering the whole image
+    return copy_tile_to_image_buffer (x, y, z, format, data, xstride,
+                                      ystride, zstride, &m_tilebuffer[0]);
+}
+
+
+
+bool
 JpgOutput::close ()
 {
-    if (! m_fd)          // Already closed
+    if (! m_fd) {         // Already closed
         return true;
+        init();
+    }
+
+    bool ok = true;
+
+    if (m_spec.tile_width) {
+        // We've been emulating tiles; now dump as scanlines.
+        ASSERT (m_tilebuffer.size());
+        ok &= write_scanlines (m_spec.y, m_spec.y+m_spec.height, 0,
+                               m_spec.format, &m_tilebuffer[0]);
+        std::vector<unsigned char>().swap (m_tilebuffer);  // free it
+    }
 
     if (m_next_scanline < spec().height && m_copy_coeffs == NULL) {
         // But if we've only written some scanlines, write the rest to avoid
@@ -314,7 +374,7 @@ JpgOutput::close ()
     m_fd = NULL;
     init();
     
-    return true;
+    return ok;
 }
 
 

@@ -68,7 +68,9 @@ endif ()
 mark_as_advanced (OPENEXR_VERSION)
 
 include_directories ("${OPENEXR_INCLUDE_DIR}")
+# OpenEXR 1.x had weird #include dirctives, this is also necessary:
 include_directories ("${OPENEXR_INCLUDE_DIR}/OpenEXR")
+
 macro (LINK_OPENEXR target)
     target_link_libraries (${target} ${OPENEXR_LIBRARIES})
 endmacro ()
@@ -83,7 +85,7 @@ endmacro ()
 message (STATUS "BOOST_ROOT ${BOOST_ROOT}")
 
 if (NOT DEFINED Boost_ADDITIONAL_VERSIONS)
-  set (Boost_ADDITIONAL_VERSIONS "1.54" "1.53" "1.52" "1.51" "1.50"
+  set (Boost_ADDITIONAL_VERSIONS "1.55" "1.54" "1.53" "1.52" "1.51" "1.50"
                                  "1.49" "1.48" "1.47" "1.46" "1.45" "1.44" 
                                  "1.43" "1.43.0" "1.42" "1.42.0")
 endif ()
@@ -100,6 +102,7 @@ else ()
     find_package (Boost 1.42 REQUIRED 
                   COMPONENTS ${Boost_COMPONENTS}
                  )
+
     # Try to figure out if this boost distro has Boost::python.  If we
     # include python in the component list above, cmake will abort if
     # it's not found.  So we resort to checking for the boost_python
@@ -141,6 +144,11 @@ else ()
     else ()
         set (oiio_boost_PYTHON_FOUND OFF)
     endif ()
+endif ()
+
+# On Linux, Boost 1.55 and higher seems to need to link against -lrt
+if (CMAKE_SYSTEM_NAME MATCHES "Linux" AND ${Boost_VERSION} GREATER 105499)
+    list (APPEND Boost_LIBRARIES "rt")
 endif ()
 
 if (VERBOSE)
@@ -334,6 +342,43 @@ endif()
 # end OpenJpeg setup_path
 ###########################################################################
 
+
+###########################################################################
+# LibRaw
+if (USE_LIBRAW)
+    message (STATUS "Looking for LibRaw with ${LIBRAW_PATH}")
+    if (LIBRAW_PATH)
+        # Customized path requested, don't use find_package
+        FIND_PATH(LibRaw_INCLUDE_DIR libraw/libraw.h
+                  PATHS "${LIBRAW_PATH}/include"
+                  NO_DEFAULT_PATH
+                 )
+        FIND_LIBRARY(LibRaw_r_LIBRARIES NAMES raw_r
+                     PATHS "${LIBRAW_PATH}/lib"
+                     NO_DEFAULT_PATH
+                    )
+    else ()
+    	find_package (LibRaw)
+    endif ()
+	if (LibRaw_r_LIBRARIES AND LibRaw_INCLUDE_DIR)
+		set (LIBRAW_FOUND TRUE)
+		include_directories (${LibRaw_INCLUDE_DIR})
+        if (VERBOSE)
+            message (STATUS "Found LibRaw, include ${LibRaw_INCLUDE_DIR}")
+        endif ()
+	else ()
+		set (LIBRAW_FOUND FALSE)
+        message (STATUS "LibRaw not found!")
+	endif()
+else ()
+    message (STATUS "Not using LibRaw")
+endif()
+
+# end LibRaw setup
+###########################################################################
+
+
+###########################################################################
 # WebP setup
 
 if (VERBOSE)
@@ -370,6 +415,7 @@ if (USE_EXTERNAL_PUGIXML)
     # insert include path to pugixml first, to ensure that the external
     # pugixml is found, and not the one in OIIO's include directory.
     include_directories (BEFORE ${PUGIXML_INCLUDE_DIR})
+    add_definitions ("-DUSE_EXTERNAL_PUGIXML=1")
 endif()
 
 

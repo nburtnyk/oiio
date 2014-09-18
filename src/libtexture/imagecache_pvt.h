@@ -39,12 +39,12 @@
 #include <boost/unordered_map.hpp>
 #include <boost/scoped_array.hpp>
 
-#include "export.h"
-#include "texture.h"
-#include "refcnt.h"
-#include "hash.h"
-#include "imagebuf.h"
-#include "unordered_map_concurrent.h"
+#include "OpenImageIO/export.h"
+#include "OpenImageIO/texture.h"
+#include "OpenImageIO/refcnt.h"
+#include "OpenImageIO/hash.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/unordered_map_concurrent.h"
 
 
 OIIO_NAMESPACE_ENTER
@@ -272,6 +272,7 @@ public:
     }
     
 private:
+    ustring m_filename_original;    ///< original filename before search path
     ustring m_filename;             ///< Filename
     bool m_used;                    ///< Recently used (in the LRU sense)
     bool m_broken;                  ///< has errors; can't be used properly
@@ -506,11 +507,7 @@ public:
 
     /// Return the space that will be needed for this tile's pixels.
     ///
-    size_t memsize_needed () const {
-        const ImageSpec &spec (file().spec(m_id.subimage(),m_id.miplevel()));
-        TypeDesc datatype = file().datatype(id().subimage());
-        return spec.tile_pixels() * spec.nchannels * datatype.size();
-    }
+    size_t memsize_needed () const;
 
     /// Mark the tile as recently used.
     ///
@@ -616,47 +613,44 @@ public:
     ImageCacheImpl ();
     virtual ~ImageCacheImpl ();
 
-    virtual bool attribute (const std::string &name, TypeDesc type, const void *val);
-    virtual bool attribute (const std::string &name, int val) {
+    virtual bool attribute (string_view name, TypeDesc type, const void *val);
+    virtual bool attribute (string_view name, int val) {
         return attribute (name, TypeDesc::INT, &val);
     }
-    virtual bool attribute (const std::string &name, float val) {
+    virtual bool attribute (string_view name, float val) {
         return attribute (name, TypeDesc::FLOAT, &val);
     }
-    virtual bool attribute (const std::string &name, double val) {
+    virtual bool attribute (string_view name, double val) {
         float f = (float) val;
         return attribute (name, TypeDesc::FLOAT, &f);
     }
-    virtual bool attribute (const std::string &name, const char *val) {
-        return attribute (name, TypeDesc::STRING, &val);
-    }
-    virtual bool attribute (const std::string &name, const std::string &val) {
+    virtual bool attribute (string_view name, string_view val) {
         const char *s = val.c_str();
         return attribute (name, TypeDesc::STRING, &s);
     }
 
-    virtual bool getattribute (const std::string &name, TypeDesc type, void *val);
-    virtual bool getattribute (const std::string &name, int &val) {
+    virtual bool getattribute (string_view name, TypeDesc type, void *val);
+    virtual bool getattribute (string_view name, int &val) {
         return getattribute (name, TypeDesc::INT, &val);
     }
-    virtual bool getattribute (const std::string &name, float &val) {
+    virtual bool getattribute (string_view name, float &val) {
         return getattribute (name, TypeDesc::FLOAT, &val);
     }
-    virtual bool getattribute (const std::string &name, double &val) {
+    virtual bool getattribute (string_view name, double &val) {
         float f;
         bool ok = getattribute (name, TypeDesc::FLOAT, &f);
         if (ok)
             val = f;
         return ok;
     }
-    virtual bool getattribute (const std::string &name, char **val) {
+    virtual bool getattribute (string_view name, char **val) {
         return getattribute (name, TypeDesc::STRING, val);
     }
-    virtual bool getattribute (const std::string &name, std::string &val) {
-        const char *s = NULL;
+    virtual bool getattribute (string_view name, std::string &val) {
+        ustring s;
         bool ok = getattribute (name, TypeDesc::STRING, &s);
         if (ok)
-            val = s;
+            val = s.string();
         return ok;
     }
 
@@ -979,11 +973,7 @@ private:
             newval = oldval + incr;
             // Now try to atomically swap it, and repeat until we've
             // done it with nobody else interfering.
-#  if USE_TBB_ATOMIC
-        } while (llstat->compare_and_swap (*llnewval,*lloldval) != *lloldval);
-#  else
         } while (llstat->bool_compare_and_swap (*llnewval,*lloldval));
-#  endif
 #endif
     }
 

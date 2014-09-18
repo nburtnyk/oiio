@@ -36,8 +36,8 @@
 #ifndef OPENIMAGEIO_IMAGEIO_PVT_H
 #define OPENIMAGEIO_IMAGEIO_PVT_H
 
-#include "imageio.h"
-#include "thread.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/thread.h"
 
 
 
@@ -50,6 +50,7 @@ namespace pvt {
 ///
 extern recursive_mutex imageio_mutex;
 extern atomic_int oiio_threads;
+extern atomic_int oiio_read_chunk;
 extern ustring plugin_searchpath;
 extern std::string format_list;
 extern std::string extension_list;
@@ -67,6 +68,9 @@ void catalog_all_plugins (std::string searchpath);
 /// void error (const char *format, ...);
 TINYFORMAT_WRAP_FORMAT (void, error, /**/,
     std::ostringstream msg;, msg, seterror(msg.str());)
+
+/// Given the format, set the default quantization range.
+void get_default_quantize (TypeDesc format, int &quant_min, int &quant_max);
 
 /// Turn potentially non-contiguous-stride data (e.g. "RGBxRGBx") into
 /// contiguous-stride ("RGBRGB"), for any format or stride values
@@ -89,16 +93,25 @@ const float *convert_to_float (const void *src, float *dst, int nvals,
 /// converted data (which may still point to src if no conversion was
 /// necessary).
 const void *convert_from_float (const float *src, void *dst, size_t nvals,
+                                int quant_min, int quant_max,
+                                TypeDesc format);
+/// DEPRECATED (1.4)
+const void *convert_from_float (const float *src, void *dst, size_t nvals,
                                 int quant_black, int quant_white,
                                 int quant_min, int quant_max,
                                 TypeDesc format);
+
 /// A version of convert_from_float that will break up big jobs with
 /// multiple threads.
 const void *parallel_convert_from_float (const float *src, void *dst,
                                          size_t nvals,
+                                         TypeDesc format, int nthreads=0);
+/// DEPRECATED (1.4)
+const void *parallel_convert_from_float (const float *src, void *dst,
+                                         size_t nvals,
                                          int quant_black, int quant_white,
                                          int quant_min, int quant_max,
-                                         TypeDesc format, int nthreads=0);
+                                         TypeDesc format, int nthreads=0) ;
 
 }  // namespace pvt
 

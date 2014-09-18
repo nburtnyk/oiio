@@ -143,14 +143,14 @@ constructed \ImageBuf using the default constructor.
 \subsection*{Constructing and initializing a writeable \ImageBuf}
 
 \apiitem{ImageBuf (const ImageSpec \&spec) \\
-ImageBuf (const std::string \&name, const ImageSpec \&spec)}
+ImageBuf (string_view name, const ImageSpec \&spec)}
 Constructs a writeable \ImageBuf with the given specification (including
 resolution, data type, metadata, etc.), initially set to all black pixels.
 Optionally, you may name the \ImageBuf.
 \apiend
 
 \apiitem{void reset (const ImageSpec \&spec) \\
-void reset (const std::string \&name, const ImageSpec \&spec)}
+void reset (string_view name, const ImageSpec \&spec)}
 Destroys any previous contents of the \ImageBuf and re-initializes it
 as a writeable all-black \ImageBuf with the given specification (including
 resolution, data type, metadata, etc.).  Optionally, you may name the
@@ -162,7 +162,7 @@ resolution, data type, metadata, etc.).  Optionally, you may name the
 Constructing a readable \ImageBuf that will hold an image to be read
 from disk.
 
-\apiitem{ImageBuf (const std::string \&name, int subimage=0, int miplevel=0, \\
+\apiitem{ImageBuf (string_view name, int subimage=0, int miplevel=0, \\
 \bigspc\bigspc ImageCache *imagecache=NULL)}
 Construct an \ImageBuf that will be used to read the named file (at the
 given subimage and MIP-level, defaulting to the first in the file).  But
@@ -174,7 +174,7 @@ If {\cf imagecache} is non-NULL, the custom
 indicates that the global/shared \ImageCache should be used.
 \apiend
 
-\apiitem{void reset (const std::string \&name, int subimage=0, int miplevel=0, \\
+\apiitem{void reset (string_view name, int subimage=0, int miplevel=0, \\
 \bigspc\bigspc ImageCache *imagecache = NULL)}
 Destroys any previous contents of the \ImageBuf and re-initializes it
 to read the named file (but doesn't actually read yet).
@@ -220,7 +220,6 @@ progress callback will never be called, since no actual file I/O
 will occur at this time (\ImageCache will load tiles or scanlines
 on demand, as individual pixel values are needed).
 
-\NEW % 1.3
 Note that {\cf read()} is not strictly necessary. If you are happy with
 the filename, subimage and MIP level specified by the \ImageBuf constructor
 (or the last call to {\cf reset()}), and you want the storage to be backed
@@ -233,7 +232,7 @@ to use {\cf force=true} or a specific {\cf convert} value to force data
 format conversion.
 \apiend
 
-\apiitem{bool init_spec (const std::string \&filename,
+\apiitem{bool init_spec (string_view filename,
                     int subimage, int miplevel)}
 This call will read the \ImageSpec for the given file, subimage, and
 MIP level into the \ImageBuf, but will not read the pixels or allocate
@@ -242,7 +241,6 @@ helpful if you have an \ImageBuf and you need to know information about
 the image, but don't want to do a full read yet, and maybe won't need
 to do the full read, depending on what's found in the spec.
 
-\NEW % 1.3
 Note that {\cf init_spec()} is not strictly necessary. If you are happy with
 the filename, subimage and MIP level specified by the \ImageBuf constructor
 (or the last call to {\cf reset()}), then the spec will be automatically
@@ -256,7 +254,7 @@ a specific {\cf convert} value to force data format conversion.
 \subsection*{Constructing an \ImageBuf that ``wraps'' an application buffer}
 
 \apiitem{ImageBuf (const ImageSpec \&spec, void *buffer) \\
-ImageBuf (const std::string \&name, const ImageSpec \&spec, void *buffer)}
+ImageBuf (string_view name, const ImageSpec \&spec, void *buffer)}
 Constructs an ImageBuf that "wraps" a memory buffer owned by the calling
 application.  It can write pixels to this buffer, but can't change its
 resolution or data type.  Optionally, it names the \ImageBuf.
@@ -265,11 +263,10 @@ resolution or data type.  Optionally, it names the \ImageBuf.
 
 \subsection*{Writing an \ImageBuf to a file}
 
-\apiitem{bool write (const std::string \&filename, \\
-  \bigspc               const std::string \&fileformat = std::string(), \\
+\apiitem{bool write (string_view filename, \\
+  \bigspc               string_view fileformat = "", \\
   \bigspc               ProgressCallback progress_callback=NULL, \\
   \bigspc               void *progress_callback_data=NULL) const}
-\NEW % 1.3
 Write the image to the named file in the named format
 (an empty format means to infer the type from the filename
 extension).  Return {\cf true} if all went ok, {\cf false} if there were
@@ -292,7 +289,6 @@ multi-image file).
 
 \apiitem{void set_write_format (TypeDesc format=TypeDesc::UNKNOWN) \\
 set set_write_tiles (int width=0, int height=0, int depth=0)}
-\NEW % 1.3
 These methods allow the caller to override the data format and tile
 sizing when using the {\cf write()} function (the variety that does
 not take an open {\cf ImageOutput*}).
@@ -307,7 +303,6 @@ yet initialized.
 \apiend
 
 \apiitem{IBStorage {\ce storage} () const}
-\NEW  % 1.3
 Returns an enumerated type describing the type of storage currently employed
 by the \ImageBuf: {\cf UNINITIALIZED} (no storage), {\cf LOCALBUFFER} (the
 \ImageBuf has allocated and owns the pixel memory), {\cf APPBUFFER} (the
@@ -333,12 +328,12 @@ contain a single data format for all channels).
 \apiend
 
 
-\apiitem{const std::string \& name (void) const}
+\apiitem{string_view {\ce name} () const}
 Returns the name of the buffer (name of the file, for an
 \ImageBuf read from disk).
 \apiend
 
-\apiitem{const std::string \& file_format_name (void) const}
+\apiitem{string_view {\ce file_format_name} () const}
 Returns the name of the file format, for an \ImageBuf read from disk
 (for example, \qkw{openexr}).
 \apiend
@@ -393,6 +388,11 @@ The oriented width, height, x, and y describe the pixel data window
 after taking the display orientation into consideration.  The
 \emph{full} versions the ``full'' (a.k.a.\ display) window after taking
 the display orientation into consideration.
+\apiend
+
+\apiitem{void {\ce set_orientation} (int orient)}
+\NEW % 1.5
+Sets the \qkw{Orientation} metadata value.
 \apiend
 
 \apiitem{TypeDesc pixeltype () const}
@@ -505,16 +505,31 @@ coordinates are outside the pixel data window, and may be one of:
 {\cf WrapBlack}, {\cf WrapClamp}, {\cf WrapPeriodic}, or {\cf WrapMirror}.
 \apiend
 
+\apiitem{void interppixel (float x, float y, float *pixel, \\
+  \bigspc                            WrapMode wrap=WrapBlack) const}
+Sample the image plane at coordinates $(x,y)$,
+using linear interpolation between pixels, placing the result in
+{\cf pixel[0..n-1]}, where $n$ is the smaller of {\cf maxchannels}
+or the actual number of channels stored in the buffer.  It is up to
+the application to ensure that {\cf pixel} points to enough memory
+to hold the required number of channels. Note that pixel data values
+themselves are at the pixel centers, so pixel $(i,j)$ is at image plane
+coordinate $(i+0.5, j+0.5)$.
+
+The {\cf wrap} describes how the image function should be computed
+outside the boundaries of the pixel data window, and may be one of:
+{\cf WrapBlack}, {\cf WrapClamp}, {\cf WrapPeriodic}, or {\cf WrapMirror}.
+\apiend
 
 \apiitem{void interppixel_NDC_full (float s, float t, float *pixel, \\
   \bigspc                            WrapMode wrap=WrapBlack) const}
-Given 2D floating point image-space coordinates ({\cf s, t}), linearly
-interpolate the surrounding pixels to yield interpolated value
+Given 2D floating point normalized image-space coordinates ({\cf s, t}),
+linearly interpolate the surrounding pixels to yield interpolated value
 {\cf pixel[0..n-1]}, where $n$ is the smaller of {\cf maxchannels}
 or the actual number of channels stored in the buffer.  It is up to
 the application to ensure that {\cf pixel} points to enough memory
 to hold the required number of channels.  The coordinates {\cf (s,t)}
-are in \emph{image space}, where (0,0) is the upper left corner
+are in \emph{normalized image space}, where (0,0) is the upper left corner
 of the full (a.k.a. ``display'') window and (1,1) is the lower right
 cornell of the full/display window.
 
@@ -879,8 +894,10 @@ static bool make_black_impl (ImageBuf &buf, ROI region)
 
 bool make_black (ImageBuf &buf, ROI region)
 {
-    OIIO_DISPATCH_COMMON_TYPES ("make_black", make_black_impl,
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES (ok, "make_black", make_black_impl,
                                  buf.spec().format, buf, region);
+    return ok;
 }
 \end{code}
 

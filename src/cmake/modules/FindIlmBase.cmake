@@ -63,8 +63,12 @@ endmacro ()
 # variable names to the specified list
 macro (PREFIX_FIND_LIB prefix libname libpath_var liblist_var cachelist_var)
   string (TOUPPER ${prefix}_${libname} tmp_prefix)
+  # Handle new library names for OpenEXR 2.1 build via cmake
+  string(REPLACE "." "_" _ILMBASE_VERSION ${ILMBASE_VERSION})
+  string(SUBSTRING ${_ILMBASE_VERSION} 0 3 _ILMBASE_VERSION )
+  
   find_library(${tmp_prefix}_LIBRARY_RELEASE
-    NAMES ${libname}
+    NAMES ${libname} ${libname}-${_ILMBASE_VERSION}
     HINTS ${${libpath_var}}
     PATH_SUFFIXES lib
     ${ILMBASE_FIND_OPTIONS}
@@ -104,27 +108,21 @@ if (ILMBASE_CACHED_STATE AND
   endforeach ()
 endif ()
 
-if (ILMBASE_CUSTOM)
-  if (NOT ILMBASE_CUSTOM_LIBRARIES)
-    message (FATAL_ERROR "Custom IlmBase libraries requested but ILMBASE_CUSTOM_LIBRARIES is not set.")
-  endif()
-  set (IlmBase_Libraries ${ILMBASE_CUSTOM_LIBRARIES})
-  separate_arguments(IlmBase_Libraries)
-else ()
-  set (IlmBase_Libraries Half Iex Imath IlmThread)
-endif ()
 
 # Generic search paths
 set (IlmBase_generic_include_paths
   ${ILMBASE_CUSTOM_INCLUDE_DIR}
   /usr/include
+  /usr/include/${CMAKE_LIBRARY_ARCHITECTURE}
   /usr/local/include
   /sw/include
   /opt/local/include)
 set (IlmBase_generic_library_paths
   ${ILMBASE_CUSTOM_LIB_DIR}
   /usr/lib
+  /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}
   /usr/local/lib
+  /usr/local/lib/${CMAKE_LIBRARY_ARCHITECTURE}
   /sw/lib
   /opt/local/lib)
 
@@ -152,12 +150,40 @@ list (APPEND IlmBase_library_paths ${IlmBase_generic_library_paths})
 PREFIX_FIND_INCLUDE_DIR (IlmBase
   OpenEXR/IlmBaseConfig.h IlmBase_include_paths)
 
-# If the headers were found, add its parent to the list of lib directories
 if (ILMBASE_INCLUDE_DIR)
-  get_filename_component (tmp_extra_dir "${ILMBASE_INCLUDE_DIR}/../" ABSOLUTE)
-  list (APPEND IlmBase_library_paths ${tmp_extra_dir})
-  unset (tmp_extra_dir)
+  # Get the version from config file, if not already set.
+  if (NOT ILMBASE_VERSION)
+    FILE(STRINGS "${ILMBASE_INCLUDE_DIR}/OpenEXR/IlmBaseConfig.h" ILMBASE_BUILD_SPECIFICATION
+         REGEX "^[ \t]*#define[ \t]+ILMBASE_VERSION_STRING[ \t]+\"[.0-9]+\".*$")
+
+    if(ILMBASE_BUILD_SPECIFICATION)
+      message(STATUS "${ILMBASE_BUILD_SPECIFICATION}")
+      string(REGEX REPLACE ".*#define[ \t]+ILMBASE_VERSION_STRING[ \t]+\"([.0-9]+)\".*"
+             "\\1" XYZ ${ILMBASE_BUILD_SPECIFICATION})
+      set("ILMBASE_VERSION" ${XYZ} CACHE STRING "Version of ILMBase lib")
+    else()
+      # Old versions (before 2.0?) do not have any version string, just assuming 2.0 should be fine though. 
+      message(WARNING "Could not determine ILMBase library version, assuming 2.0.")
+      set("ILMBASE_VERSION" "2.0" CACHE STRING "Version of ILMBase lib")
+    endif()
+  endif()
 endif ()
+
+
+if (ILMBASE_CUSTOM)
+  if (NOT ILMBASE_CUSTOM_LIBRARIES)
+    message (FATAL_ERROR "Custom IlmBase libraries requested but ILMBASE_CUSTOM_LIBRARIES is not set.")
+  endif()
+  set (IlmBase_Libraries ${ILMBASE_CUSTOM_LIBRARIES})
+  separate_arguments(IlmBase_Libraries)
+else ()
+#elseif (${ILMBASE_VERSION} VERSION_LESS "2.1")
+  set (IlmBase_Libraries Half Iex Imath IlmThread)
+#else ()
+#  string(REGEX REPLACE "([0-9]+)[.]([0-9]+).*" "\\1_\\2" _ilmbase_libs_ver ${ILMBASE_VERSION})
+#  set (IlmBase_Libraries Half Iex-${_ilmbase_libs_ver} Imath-${_ilmbase_libs_ver} IlmThread-${_ilmbase_libs_ver})
+endif ()
+
 
 # Locate the IlmBase libraries
 set (IlmBase_libvars "")
@@ -166,7 +192,6 @@ foreach (ilmbase_lib ${IlmBase_Libraries})
   PREFIX_FIND_LIB (IlmBase ${ilmbase_lib}
     IlmBase_library_paths IlmBase_libvars IlmBase_cachevars)
 endforeach ()
-
 # Create the list of variables that might need to be cleared
 set (ILMBASE_CACHED_VARS
   ILMBASE_INCLUDE_DIR ${IlmBase_cachevars}

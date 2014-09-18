@@ -31,9 +31,9 @@
 
 #ifndef OIIOTOOL_H
 
-#include "imagebuf.h"
-#include "refcnt.h"
-#include "timer.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/refcnt.h"
+#include "OpenImageIO/timer.h"
 
 
 OIIO_NAMESPACE_ENTER {
@@ -56,8 +56,10 @@ public:
     bool printinfo;
     bool printstats;
     bool dumpdata;
+    bool dumpdata_showempty;
     bool hash;
     bool updatemode;
+    bool autoorient;
     int threads;
     std::string full_command_line;
     std::string printinfo_metamatch;
@@ -75,6 +77,9 @@ public:
     bool output_adjust_time;
     bool output_autocrop;
     bool output_autotrim;
+    bool output_dither;
+    bool output_force_tiles; // for debugging
+    bool metadata_nosoftwareattrib;
 
     // Options for --diff
     float diff_warnthresh;
@@ -87,6 +92,7 @@ public:
     // Internal state
     ImageRecRef curimg;                      // current image
     std::vector<ImageRecRef> image_stack;    // stack of previous images
+    std::map<std::string, ImageRecRef> image_labels; // labeled images
     ImageCache *imagecache;                  // back ptr to ImageCache
     int return_value;                        // oiiotool command return code
     ColorConfig colorconfig;                 // OCIO color config
@@ -102,9 +108,13 @@ public:
     void clear_options ();
 
     // Force img to be read at this point.
-    void read (ImageRecRef img);
+    bool read (ImageRecRef img);
     // Read the current image
-    void read () { if (curimg) read (curimg); }
+    bool read () {
+        if (curimg)
+            return read (curimg);
+        return true;
+    }
 
     // If required_images are not yet on the stack, then postpone this
     // call by putting it on the 'pending' list and return true.
@@ -143,7 +153,18 @@ public:
 
     ImageRecRef top () { return curimg; }
 
-    void error (const std::string &command, const std::string &explanation="");
+    // Modify the resolution and/or offset according to what's in geom.
+    // Valid geometries are WxH (resolution), +X+Y (offsets), WxH+X+Y
+    // (resolution and offset).  If 'allow_scaling' is true, geometries of
+    // S% (e.g. "50%") or just S (e.g., "1.2") will be accepted to scale the
+    // existing width and height (rounding to the nearest whole number of
+    // pixels.
+    bool adjust_geometry (string_view command,
+                          int &w, int &h, int &x, int &y, const char *geom,
+                          bool allow_scaling=false);
+
+    void error (string_view command, string_view explanation="");
+    void warning (string_view command, string_view explanation="");
 
 private:
     CallbackFunction m_pending_callback;
@@ -297,6 +318,21 @@ public:
         metadata_modified();
     }
 
+    /// Error reporting for ImageRec: call this with printf-like arguments.
+    /// Note however that this is fully typesafe!
+    /// void error (const char *format, ...)
+    TINYFORMAT_WRAP_FORMAT (void, error, const,
+        std::ostringstream msg;, msg, append_error(msg.str());)
+
+    /// Return true if the IR has had an error and has an error message
+    /// to retrieve via geterror().
+    bool has_error (void) const;
+
+    /// Return the text of all error messages issued since geterror() was
+    /// called (or an empty string if no errors are pending).  This also
+    /// clears the error message for next time if clear_error is true.
+    std::string geterror (bool clear_error = true) const;
+
 private:
     std::string m_name;
     bool m_elaborated;
@@ -305,6 +341,11 @@ private:
     std::vector<SubimageRec> m_subimages;
     std::time_t m_time;  //< Modification time of the input file
     ImageCache *m_imagecache;
+    mutable std::string m_err;
+
+    // Add to the error message
+    void append_error (string_view message) const;
+
 };
 
 
@@ -318,6 +359,7 @@ struct print_info_options {
     bool compute_sha1;
     bool compute_stats;
     bool dumpdata;
+    bool dumpdata_showempty;
     std::string metamatch;
     std::string nometamatch;
     size_t namefieldlength;
@@ -325,7 +367,7 @@ struct print_info_options {
     print_info_options ()
         : verbose(false), filenameprefix(false), sum(false), subimages(false),
           compute_sha1(false), compute_stats(false), dumpdata(false),
-          namefieldlength(20)
+          dumpdata_showempty(true), namefieldlength(20)
     {}
 };
 
@@ -335,19 +377,10 @@ struct print_info_options {
 // of the uncompressed pixels in the file is returned in totalsize.  The
 // return value will be true if everything is ok, or false if there is
 // an error (in which case the error message will be stored in 'error').
-bool print_info (const std::string &filename, 
+bool print_info (Oiiotool &ot, const std::string &filename, 
                  const print_info_options &opt,
                  long long &totalsize, std::string &error);
 
-
-// Modify the resolution and/or offset according to what's in geom.
-// Valid geometries are WxH (resolution), +X+Y (offsets), WxH+X+Y
-// (resolution and offset).  If 'allow_scaling' is true, geometries of
-// S% (e.g. "50%") or just S (e.g., "1.2") will be accepted to scale the
-// existing width and height (rounding to the nearest whole number of
-// pixels.
-bool adjust_geometry (int &w, int &h, int &x, int &y, const char *geom,
-                      bool allow_scaling=false);
 
 // Set an attribute of the given image.  The type should be one of
 // TypeDesc::INT (decode the value as an int), FLOAT, STRING, or UNKNOWN
@@ -374,7 +407,8 @@ enum DiffErrors {
     DiffErrLast
 };
 
-int do_action_diff (ImageRec &ir0, ImageRec &ir1, Oiiotool &options);
+int do_action_diff (ImageRec &ir0, ImageRec &ir1, Oiiotool &options,
+                    int perceptual = 0);
 
 
 
@@ -390,7 +424,9 @@ bool apply_spec_mod (ImageRec &img, Action act, const Type &t,
     img.metadata_modified (true);
     for (int s = 0, send = img.subimages();  s < send;  ++s) {
         for (int m = 0, mend = img.miplevels(s);  m < mend;  ++m) {
-            ok &= act (*img.spec(s,m), t);
+            ok &= act (img(s,m).specmod(), t);
+            if (ok)
+                img.update_spec_from_imagebuf (s, m);
             if (! allsubimages)
                 break;
         }

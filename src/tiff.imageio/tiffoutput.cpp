@@ -37,12 +37,21 @@
 
 #include <tiffio.h>
 
-#include "dassert.h"
-#include "imageio.h"
-#include "filesystem.h"
-#include "strutil.h"
-#include "sysutil.h"
-#include "timer.h"
+// Some EXIF tags that don't seem to be in tiff.h
+#ifndef EXIFTAG_SECURITYCLASSIFICATION
+#define EXIFTAG_SECURITYCLASSIFICATION 37394
+#endif
+#ifndef EXIFTAG_IMAGEHISTORY
+#define EXIFTAG_IMAGEHISTORY 37395
+#endif
+
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/sysutil.h"
+#include "OpenImageIO/timer.h"
+#include "OpenImageIO/fmath.h"
 
 #include <boost/scoped_array.hpp>
 
@@ -81,6 +90,7 @@ private:
     int m_planarconfig;
     Timer m_checkpointTimer;
     int m_checkpointItems;
+    unsigned int m_dither;
 
     // Initialize private members to pre-opened state
     void init (void) {
@@ -93,6 +103,7 @@ private:
     // Add a parameter to the output
     bool put_parameter (const std::string &name, TypeDesc type,
                         const void *data);
+    bool write_exif_data ();
 };
 
 
@@ -113,8 +124,15 @@ OIIO_PLUGIN_EXPORTS_END
 
 
 
+extern std::string & oiio_tiff_last_error ();
+extern void oiio_tiff_set_error_handler ();
+
+
+
+
 TIFFOutput::TIFFOutput ()
 {
+    oiio_tiff_set_error_handler ();
     init ();
 }
 
@@ -150,6 +168,8 @@ TIFFOutput::supports (const std::string &feature) const
 }
 
 
+#define ICC_PROFILE_ATTR "ICCProfile"
+
 
 bool
 TIFFOutput::open (const std::string &name, const ImageSpec &userspec,
@@ -169,6 +189,14 @@ TIFFOutput::open (const std::string &name, const ImageSpec &userspec,
                m_spec.width, m_spec.height);
         return false;
     }
+    if (m_spec.tile_width) {
+       if (m_spec.tile_width  % 16 != 0 ||
+           m_spec.tile_height % 16 != 0 ||
+           m_spec.tile_height == 0) {
+          error("Tile size must be a multiple of 16, you asked for %d x %d", m_spec.tile_width, m_spec.tile_height);
+          return false;
+       }
+    }
     if (m_spec.depth < 1)
         m_spec.depth = 1;
 
@@ -184,8 +212,11 @@ TIFFOutput::open (const std::string &name, const ImageSpec &userspec,
         return false;
     }
 
-    TIFFSetField (m_tif, TIFFTAG_XPOSITION, (float)m_spec.x);
-    TIFFSetField (m_tif, TIFFTAG_YPOSITION, (float)m_spec.y);
+    // N.B. Clamp position at 0... TIFF is internally incapable of having
+    // negative origin.
+    TIFFSetField (m_tif, TIFFTAG_XPOSITION, (float)std::max (0, m_spec.x));
+    TIFFSetField (m_tif, TIFFTAG_YPOSITION, (float)std::max (0, m_spec.y));
+
     TIFFSetField (m_tif, TIFFTAG_IMAGEWIDTH, m_spec.width);
     TIFFSetField (m_tif, TIFFTAG_IMAGELENGTH, m_spec.height);
     if ((m_spec.full_width != 0 || m_spec.full_height != 0) &&
@@ -295,6 +326,15 @@ TIFFOutput::open (const std::string &name, const ImageSpec &userspec,
         m_spec.attribute ("DateTime", date);
     }
 
+    // Write ICC profile, if we have anything
+    const ImageIOParameter* icc_profile_parameter = m_spec.find_attribute(ICC_PROFILE_ATTR);
+    if (icc_profile_parameter != NULL) {
+        unsigned char *icc_profile = (unsigned char*)icc_profile_parameter->data();
+        uint32 length = icc_profile_parameter->type().size();
+        if (icc_profile && length)
+            TIFFSetField (m_tif, TIFFTAG_ICCPROFILE, length, icc_profile);
+    }
+
     if (Strutil::iequals (m_spec.get_string_attribute ("oiio:ColorSpace"), "sRGB"))
         m_spec.attribute ("Exif:ColorSpace", 1);
 
@@ -318,7 +358,10 @@ TIFFOutput::open (const std::string &name, const ImageSpec &userspec,
     TIFFCheckpointDirectory (m_tif);  // Ensure the header is written early
     m_checkpointTimer.start(); // Initialize the to the fileopen time
     m_checkpointItems = 0; // Number of tiles or scanlines we've written
-    
+
+    m_dither = (m_spec.format == TypeDesc::UINT8) ?
+                    m_spec.get_int_attribute ("oiio:dither", 0) : 0;
+
     return true;
 }
 
@@ -454,13 +497,91 @@ TIFFOutput::put_parameter (const std::string &name, TypeDesc type,
         TIFFSetField (m_tif, TIFFTAG_YRESOLUTION, *(float *)data);
         return true;
     }
-
-    // FIXME -- we don't currently support writing of EXIF fields.  TIFF
-    // in theory allows it, using a custom IFD directory, but at
-    // present, it appears that libtiff only supports reading custom
-    // IFD's, not writing them.
-
     return false;
+}
+
+
+
+bool
+TIFFOutput::write_exif_data ()
+{
+#if TIFFLIB_VERSION >= 20120922
+    // Older versions of libtiff do not support writing Exif directories
+
+    // First, see if we have any Exif data at all
+    bool any_exif = false;
+    for (size_t i = 0, e = m_spec.extra_attribs.size(); i < e; ++i) {
+        const ImageIOParameter &p (m_spec.extra_attribs[i]);
+        int tag, tifftype, count;
+        if (exif_tag_lookup (p.name(), tag, tifftype, count) &&
+                tifftype != TIFF_NOTYPE) {
+            if (tag == EXIFTAG_SECURITYCLASSIFICATION ||
+                tag == EXIFTAG_IMAGEHISTORY ||
+                tag == EXIFTAG_ISOSPEEDRATINGS)
+                continue;   // libtiff doesn't understand these
+            any_exif = true;
+            break;
+        }
+    }
+    if (! any_exif)
+        return true;
+
+    // First, finish writing the current directory
+    if (! TIFFWriteDirectory (m_tif)) {
+        error ("failed TIFFWriteDirectory()");
+        return false;
+    }
+
+    // Create an Exif directory
+    if (TIFFCreateEXIFDirectory (m_tif) != 0) {
+        error ("failed TIFFCreateEXIFDirectory()");
+        return false;
+    }
+
+    for (size_t i = 0, e = m_spec.extra_attribs.size(); i < e; ++i) {
+        const ImageIOParameter &p (m_spec.extra_attribs[i]);
+        int tag, tifftype, count;
+        if (exif_tag_lookup (p.name(), tag, tifftype, count) &&
+                tifftype != TIFF_NOTYPE) {
+            if (tag == EXIFTAG_SECURITYCLASSIFICATION ||
+                tag == EXIFTAG_IMAGEHISTORY ||
+                tag == EXIFTAG_ISOSPEEDRATINGS)
+                continue;   // libtiff doesn't understand these
+            bool ok = false;
+            if (tifftype == TIFF_ASCII) {
+                ok = TIFFSetField (m_tif, tag, *(char**)p.data());
+            } else if ((tifftype == TIFF_SHORT || tifftype == TIFF_LONG) &&
+                       p.type() == TypeDesc::SHORT) {
+                ok = TIFFSetField (m_tif, tag, (int)*(short *)p.data());
+            } else if ((tifftype == TIFF_SHORT || tifftype == TIFF_LONG) &&
+                       p.type() == TypeDesc::INT) {
+                ok = TIFFSetField (m_tif, tag, *(int *)p.data());
+            } else if ((tifftype == TIFF_RATIONAL || tifftype == TIFF_SRATIONAL) &&
+                       p.type() == TypeDesc::FLOAT) {
+                ok = TIFFSetField (m_tif, tag, *(float *)p.data());
+            } else if ((tifftype == TIFF_RATIONAL || tifftype == TIFF_SRATIONAL) &&
+                       p.type() == TypeDesc::DOUBLE) {
+                ok = TIFFSetField (m_tif, tag, *(double *)p.data());
+            }
+            if (! ok) {
+                // std::cout << "Unhandled EXIF " << p.name() << " " << p.type() << "\n";
+            }
+        }
+    }
+
+    // Now write the directory of Exif data
+    uint64 dir_offset = 0;
+    if (! TIFFWriteCustomDirectory (m_tif, &dir_offset)) {
+        error ("failed TIFFWriteCustomDirectory() of the Exif data");
+        return false;
+    }
+    // Go back to the first directory, and add the EXIFIFD pointer. 
+    // std::cout << "diffdir = " << tiffdir << "\n";
+    TIFFSetDirectory (m_tif, 0);
+    TIFFSetField (m_tif, TIFFTAG_EXIFIFD, dir_offset);
+#endif
+
+    return true;  // all is ok
 }
 
 
@@ -468,8 +589,10 @@ TIFFOutput::put_parameter (const std::string &name, TypeDesc type,
 bool
 TIFFOutput::close ()
 {
-    if (m_tif)
+    if (m_tif) {
+        write_exif_data ();
         TIFFClose (m_tif);    // N.B. TIFFClose doesn't return a status code
+    }
     init ();      // re-initialize
     return true;  // How can we fail?
 }
@@ -497,7 +620,8 @@ TIFFOutput::write_scanline (int y, int z, TypeDesc format,
 {
     m_spec.auto_stride (xstride, format, spec().nchannels);
     const void *origdata = data;
-    data = to_native_scanline (format, data, xstride, m_scratch);
+    data = to_native_scanline (format, data, xstride, m_scratch,
+                               m_dither, y, z);
 
     y -= m_spec.y;
     if (m_planarconfig == PLANARCONFIG_SEPARATE) {
@@ -557,7 +681,8 @@ TIFFOutput::write_tile (int x, int y, int z,
     x -= m_spec.x;   // Account for offset, so x,y are file relative, not 
     y -= m_spec.y;   // image relative
     const void *origdata = data;   // Stash original pointer
-    data = to_native_tile (format, data, xstride, ystride, zstride, m_scratch);
+    data = to_native_tile (format, data, xstride, ystride, zstride,
+                           m_scratch, m_dither, x, y, z);
     if (m_planarconfig == PLANARCONFIG_SEPARATE && m_spec.nchannels > 1) {
         // Convert from contiguous (RGBRGBRGB) to separate (RRRGGGBBB)
         imagesize_t tile_pixels = m_spec.tile_pixels();

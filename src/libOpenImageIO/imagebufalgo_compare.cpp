@@ -36,7 +36,7 @@
    If it is included after, there is an error
    "undefined reference to CSHA1::Update (unsigned char const*, unsigned long)"
 */
-#include "SHA1.h"
+#include "OpenImageIO/SHA1.h"
 
 #include <boost/bind.hpp>
 
@@ -46,11 +46,10 @@
 #include <iostream>
 #include <limits>
 
-#include "imagebuf.h"
-#include "imagebufalgo.h"
-#include "imagebufalgo_util.h"
-#include "dassert.h"
-#include "thread.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/imagebufalgo.h"
+#include "OpenImageIO/imagebufalgo_util.h"
+#include "OpenImageIO/dassert.h"
 
 #ifdef USE_OPENSSL
 #ifdef __APPLE__
@@ -203,8 +202,8 @@ computePixelStats_ (const ImageBuf &src, ImageBufAlgo::PixelStats &stats,
 
     // Compute final results
     finalize (stats);
-    
-    return true;
+
+    return ! src.has_error();
 };
 
 
@@ -223,9 +222,10 @@ ImageBufAlgo::computePixelStats (PixelStats &stats, const ImageBuf &src,
         return false;
     }
 
-    OIIO_DISPATCH_TYPES ("computePixelStats", computePixelStats_,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "computePixelStats", computePixelStats_,
                          src.spec().format, src, stats, roi, nthreads);
-    return false;
+    return ok;
 }
 
 
@@ -337,14 +337,15 @@ ImageBufAlgo::compare (const ImageBuf &A, const ImageBuf &B,
     if (B.deep() != A.deep())
         return false;
 
-    OIIO_DISPATCH_TYPES2 ("compare", compare_,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "compare", compare_,
                           A.spec().format, B.spec().format,
                           A, B, failthresh, warnthresh, result,
                           roi, nthreads);
     // FIXME - The nthreads argument is for symmetry with the rest of
     // ImageBufAlgo and for future expansion. But for right now, we
     // don't actually split by threads.  Maybe later.
-    return false;
+    return ok;
 }
 
 
@@ -394,8 +395,10 @@ ImageBufAlgo::isConstantColor (const ImageBuf &src, float *color,
     if (roi.nchannels() == 0)
         return true;
     
-    OIIO_DISPATCH_TYPES ("isConstantColor", isConstantColor_,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "isConstantColor", isConstantColor_,
                          src.spec().format, src, color, roi, nthreads);
+    return ok;
     // FIXME -  The nthreads argument is for symmetry with the rest of
     // ImageBufAlgo and for future expansion. But for right now, we
     // don't actually split by threads.  Maybe later.
@@ -428,8 +431,10 @@ ImageBufAlgo::isConstantChannel (const ImageBuf &src, int channel, float val,
     if (channel < 0 || channel >= src.nchannels())
         return false;  // that channel doesn't exist in the image
 
-    OIIO_DISPATCH_TYPES ("isConstantChannel", isConstantChannel_,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "isConstantChannel", isConstantChannel_,
                          src.spec().format, src, channel, val, roi, nthreads);
+    return ok;
     // FIXME -  The nthreads argument is for symmetry with the rest of
     // ImageBufAlgo and for future expansion. But for right now, we
     // don't actually split by threads.  Maybe later.
@@ -466,8 +471,10 @@ ImageBufAlgo::isMonochrome (const ImageBuf &src, ROI roi, int nthreads)
     if (roi.nchannels() < 2)
         return true;  // 1 or fewer channels are always "monochrome"
 
-    OIIO_DISPATCH_TYPES ("isMonochrome", isMonochrome_, src.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "isMonochrome", isMonochrome_, src.spec().format,
                          src, roi, nthreads);
+    return ok;
     // FIXME -  The nthreads argument is for symmetry with the rest of
     // ImageBufAlgo and for future expansion. But for right now, we
     // don't actually split by threads.  Maybe later.
@@ -537,9 +544,11 @@ ImageBufAlgo::color_count (const ImageBuf &src, imagesize_t *count,
 
     for (int col = 0;  col < ncolors;  ++col)
         count[col] = 0;
-    OIIO_DISPATCH_TYPES ("color_count", color_count_, src.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "color_count", color_count_, src.spec().format,
                          src, (atomic_ll *)count, ncolors, color, eps,
                          roi, nthreads);
+    return ok;
 }
 
 
@@ -607,11 +616,13 @@ ImageBufAlgo::color_range_check (const ImageBuf &src, imagesize_t *lowcount,
         *highcount = 0;
     if (inrangecount)
         *inrangecount = 0;
-    OIIO_DISPATCH_TYPES ("color_range_check", color_range_check_,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "color_range_check", color_range_check_,
                          src.spec().format,
                          src, (atomic_ll *)lowcount, 
                          (atomic_ll *)highcount, (atomic_ll *)inrangecount,
                          low, high, roi, nthreads);
+    return ok;
 }
 
 
@@ -671,7 +682,7 @@ namespace {
 
 std::string
 simplePixelHashSHA1 (const ImageBuf &src,
-                     const std::string & extrainfo, ROI roi)
+                     string_view extrainfo, ROI roi)
 {
     if (! roi.defined())
         roi = get_roi (src.spec());
@@ -708,7 +719,7 @@ simplePixelHashSHA1 (const ImageBuf &src,
     
     // If extra info is specified, also include it in the sha computation
     if (!extrainfo.empty())
-        SHA1_Update (&sha, extrainfo.c_str(), extrainfo.size());
+        SHA1_Update (&sha, extrainfo.data(), extrainfo.size());
 
     unsigned char md[SHA_DIGEST_LENGTH];
     char hash_digest[2*SHA_DIGEST_LENGTH+1];
@@ -739,7 +750,7 @@ simplePixelHashSHA1 (const ImageBuf &src,
     
     // If extra info is specified, also include it in the sha computation
     if (!extrainfo.empty()) {
-        sha.Update ((const unsigned char*) extrainfo.c_str(), extrainfo.size());
+        sha.Update ((const unsigned char*) extrainfo.data(), extrainfo.size());
     }
     
     sha.Final ();
@@ -773,7 +784,7 @@ sha1_hasher (const ImageBuf *src, ROI roi, int blocksize,
 
 std::string
 ImageBufAlgo::computePixelHashSHA1 (const ImageBuf &src,
-                                    const std::string & extrainfo,
+                                    string_view extrainfo,
                                     ROI roi, int blocksize, int nthreads)
 {
     if (! roi.defined())

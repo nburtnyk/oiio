@@ -37,12 +37,11 @@
 #include <boost/filesystem.hpp>
 #include <boost/foreach.hpp>
 
-#include "dassert.h"
-#include "plugin.h"
-#include "strutil.h"
-#include "filesystem.h"
-
-#include "imageio.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/plugin.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/imageio.h"
 #include "imageio_pvt.h"
 
 
@@ -225,6 +224,7 @@ catalog_plugin (const std::string &format_name,
     PLUGENTRY (pnm);
     PLUGENTRY (psd);
     PLUGENTRY (ptex);
+    PLUGENTRY (raw);
     PLUGENTRY (rla);
     PLUGENTRY (sgi);
     PLUGENTRY (socket);
@@ -279,6 +279,9 @@ catalog_builtin_plugins ()
     DECLAREPLUG (pnm);
     DECLAREPLUG (psd);
     DECLAREPLUG (ptex);
+#ifdef USE_LIBRAW
+    DECLAREPLUG (raw);
+#endif
     DECLAREPLUG (rla);
     DECLAREPLUG (sgi);
 #ifdef USE_BOOST_ASIO

@@ -92,7 +92,7 @@ crowd out the other application threads.
 \section{Pattern generation}
 \label{sec:iba:patterns}
 
-\apiitem{bool zero (ImageBuf \&dst, ROI roi=ROI::All(), int nthreads=0)}
+\apiitem{bool {\ce zero} (ImageBuf \&dst, ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!zero} \indexapi{zero}
 Set the destination image pixels to 0 within the specified region.
 This operation is performed in-place.  The {\cf dst} buffer needs to
@@ -119,7 +119,7 @@ big to make it or what data type it should have.
 \end{code}
 \apiend
 
-\apiitem{bool fill (ImageBuf \&dst, const float *values, \\
+\apiitem{bool {\ce fill} (ImageBuf \&dst, const float *values, \\
   \bigspc ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!fill} \indexapi{fill}
 Set the pixels in the destination image within the specified region
@@ -132,17 +132,18 @@ number of channels in the image, whichever is smaller.
 \begin{code}
     // Create a new 640x480 RGB image, fill it with pink
     ImageBuf A ("myimage", ImageSpec(640, 480, 3, TypeDesc::FLOAT);
-    float pink[3] = { 1, 0.5, 0.5 };
+    float pink[3] = { 1, 0.7, 0.7 };
     ImageBufAlgo::fill (A, pink);
 
     // Draw a red rectangle
     float red[3] = { 1, 0, 0 };
-    ImageBufAlgo::fill (A, red, ROI(50,100, 75, 85));
+    ImageBufAlgo::fill (A, red, ROI(50,100, 75, 175));
 \end{code}
+\spc \includegraphics[width=1.25in]{figures/fill.jpg}  \\
 \apiend
 
 
-\apiitem{bool checker (ImageBuf \&dst, float width, float height, float depth, \\
+\apiitem{bool {\ce checker} (ImageBuf \&dst, float width, float height, float depth, \\
 \bigspc const float *color1, const float *color2, \\
 \bigspc int xoffset=0, int yoffset=0, int zoffset=0, \\
 \bigspc ROI roi=ROI::All(), int nthreads=0)}
@@ -164,12 +165,13 @@ image.
     float light[3] = { 0.4, 0.4, 0.4 };
     ImageBufAlgo::checker (A, 64, 64, 1, dark, light, 0, 0, 0);
 \end{code}
+\spc \includegraphics[width=1.25in]{figures/checker.jpg}  \\
 \apiend
 
 
-\apiitem{bool render_text (ImageBuf \&dst, int x, int y, \\
-  \bigspc  const std::string \&text, int fontsize=16, \\
-  \bigspc  const std::string \&fontname="", \\
+\apiitem{bool {\ce render_text} (ImageBuf \&dst, int x, int y, \\
+  \bigspc  string_view text, int fontsize=16, \\
+  \bigspc  string_view fontname="", \\
   \bigspc  const float *textcolor = NULL)}
 \index{ImageBufAlgo!render_text} \indexapi{render_text}
 Render a text string into the destination, essentially doing an ``over'' of
@@ -193,6 +195,11 @@ least equal to the number of channels in {\cf dst}).
     ImageBufAlgo::render_text (A, 100, 200, "Go Big Red!",
                                60, "Arial Bold", red);
 \end{code}
+\spc \includegraphics[width=2.5in]{figures/text.jpg}  \\
+
+\noindent Note that because of slightly differing fonts and versions of
+Freetype available, we do not expect drawn text to be pixel-for-pixel 
+identical on different platforms supported by \product.
 \apiend
 
 
@@ -202,7 +209,7 @@ least equal to the number of channels in {\cf dst}).
 \section{Image transformations and data movement}
 \label{sec:iba:transforms}
 
-\apiitem{bool channels (ImageBuf \&dst, const ImageBuf \&src, int nchannels, \\
+\apiitem{bool {\ce channels} (ImageBuf \&dst, const ImageBuf \&src, int nchannels, \\
         \bigspc  const int *channelorder,  const float *channelvalues=NULL, \\
         \bigspc                 const std::string *newchannelnames=NULL, \\
         \bigspc                 bool shuffle_channel_names=false)}
@@ -257,7 +264,7 @@ semantic change at all, if you catch the drift.
 \end{code}
 \apiend
 
-\apiitem{bool channel_append (ImageBuf \&dst, const ImageBuf \&A, const ImageBuf \&B, \\
+\apiitem{bool {\ce channel_append} (ImageBuf \&dst, const ImageBuf \&A, const ImageBuf \&B, \\
         \bigspc  ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!channel_append} \indexapi{channel_append}
 Append the channels of {\cf A} and {\cf B} together into {\cf dst} over
@@ -281,7 +288,6 @@ region.
 \apiitem{bool {\ce flatten} (ImageBuf \&dst, const ImageBuf \&src, \\
         \bigspc  ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!flatten} \indexapi{flatten} \index{deep images}
-\NEW   % 1.3
 Copy pixels from \emph{deep} image {\cf src} into non-deep {\cf dst},
 compositing the depth samples within each pixel to yield a single ``flat''
 value per pixel. If {\cf src} is not deep, it just copies the pixels without
@@ -297,10 +303,15 @@ alteration.
 \apiend
 
 
-\apiitem{bool crop (ImageBuf \&dst, const ImageBuf \&src, \\
+\apiitem{bool {\ce crop} (ImageBuf \&dst, const ImageBuf \&src, \\
         \bigspc  ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!crop} \indexapi{crop}
 Reset {\cf dst} to be the specified region of {\cf src}.
+
+Note that the {\cf crop} operation does not actually move the pixels on the
+image plane or adjust the full/display window; it merely restricts which
+pixels are copied from {\cf src} to {\cf dst}.  (Note the difference
+compared to {\cf cut()}).
 
 \smallskip
 \noindent Examples:
@@ -313,7 +324,26 @@ Reset {\cf dst} to be the specified region of {\cf src}.
 \apiend
 
 
-\apiitem{bool paste (ImageBuf \&dst, int xbegin, int ybegin, int zbegin,
+\apiitem{bool {\ce cut} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc  ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!cut} \indexapi{cut}
+Reset {\cf dst} to be the specified region of {\cf src}, but repositioned at
+the image plane origin and with the full/display window set to exactly cover
+the new pixel window.  (Note the difference compared to {\cf crop()}).
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    // Set B to be the 100x100 region of A with origin (50,200).
+    ImageBuf A (...);  // Assume initialized
+    ImageBuf B;
+    ImageBufAlgo::cut (B, A, ROI(50,250,200,300));
+    // Note: B has origin at 0,0, NOT at (50,200).
+\end{code}
+\apiend
+
+
+\apiitem{bool {\ce paste} (ImageBuf \&dst, int xbegin, int ybegin, int zbegin,
   int chbegin, \\
   \bigspc const ImageBuf \&src, ROI srcroi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!paste} \indexapi{paste}
@@ -333,6 +363,67 @@ the entirety of src will be used.  It will copy into channels
 \apiend
 
 
+\apiitem{bool {\ce rotate90} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc  ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!rotate90} \indexapi{rotate90}
+\NEW  % 1.5
+Copy {\cf src} (or a subregion of {\cf src} to the corresponding pixels
+of {\cf dst}, but rotated 90 degrees clockwise.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    ImageBuf A ("grid.jpg");
+    ImageBuf B;
+    ImageBufAlgo::rotate90 (B, A);
+\end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg}
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/rotate90.jpg} \\
+\apiend
+
+
+\apiitem{bool {\ce rotate180} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc  ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!rotate180} \indexapi{rotate180}
+\NEW % 1.5
+Copy {\cf src} (or a subregion of {\cf src} to the corresponding pixels
+of {\cf dst}, but rotated 180 degrees.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    ImageBuf A ("grid.jpg");
+    ImageBuf B;
+    ImageBufAlgo::rotate180 (B, A);
+\end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg}
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/rotate180.jpg} \\
+\apiend
+
+
+\apiitem{bool {\ce rotate270} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc  ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!rotate270} \indexapi{rotate270}
+\NEW % 1.5
+Copy {\cf src} (or a subregion of {\cf src} to the corresponding pixels
+of {\cf dst}, but rotated 270 degrees clockwise (or 90 degrees
+counter-clockwise).
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    ImageBuf A ("grid.jpg");
+    ImageBuf B;
+    ImageBufAlgo::rotate270 (B, A);
+\end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg}
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/rotate270.jpg} \\
+\apiend
+
+
 \apiitem{bool {\ce flip} (ImageBuf \&dst, const ImageBuf \&src, \\
         \bigspc  ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!flip} \indexapi{flip}
@@ -342,10 +433,13 @@ of {\cf dst}, but with the scanlines exchanged vertically.
 \smallskip
 \noindent Examples:
 \begin{code}
-    ImageBuf A ("tahoe.exr");
+    ImageBuf A ("grid.jpg");
     ImageBuf B;
     ImageBufAlgo::flip (B, A);
 \end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg}
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/flip.jpg} \\
 \apiend
 
 
@@ -357,27 +451,38 @@ of {\cf dst}, but with the columns exchanged horizontally.
 \smallskip
 \noindent Examples:
 \begin{code}
-    ImageBuf A ("tahoe.exr");
+    ImageBuf A ("grid.jpg");
     ImageBuf B;
     ImageBufAlgo::flop (B, A);
 \end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg}
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/flop.jpg} \\
 \apiend
 
 
-\apiitem{bool {\ce flipflop} (ImageBuf \&dst, const ImageBuf \&src, \\
+\apiitem{bool {\ce reorient} (ImageBuf \&dst, const ImageBuf \&src, \\
         \bigspc  ROI roi=ROI::All(), int nthreads=0)}
-\index{ImageBufAlgo!flipflop} \indexapi{flipflop}
-Copy {\cf src} (or a subregion of {\cf src} to the corresponding pixels
-of {\cf dst}, but with both the rows exchanged vertically and the
-columns exchanged horizontally (this is equivalent to a 180 degree rotation).
+\index{ImageBufAlgo!reorient} \indexapi{reorient}
+\NEW % 1.5
+Copy {\cf src} to {\cf dst}, but with whatever seties of rotations, flips,
+or flops are necessary to transform the pixels into the configuration
+suggested by the \qkw{Orientation} metadata of the image (and the
+\qkw{Orientation} metadata is then set to 1, ordinary orientation).
+
+It is allowed for {\cf src} and {\cf dst} to refer to the same image, in
+which case the operation will be done ``in place'' (though not in a way
+that is safe for another thread to be accessing the image simultaneously).
 
 \smallskip
 \noindent Examples:
 \begin{code}
-    ImageBuf A ("tahoe.exr");
-    ImageBuf B;
-    ImageBufAlgo::flipflop (B, A);
+    ImageBuf A ("tahoe.jpg");
+    ImageBufAlgo::reorient (A, A);
 \end{code}
+%\spc \includegraphics[width=1.25in]{figures/grid-small.jpg}
+%~ {\Huge $\rightarrow$} ~
+%\includegraphics[width=1.25in]{figures/flop.jpg} \\
 \apiend
 
 
@@ -392,10 +497,13 @@ set {\cf dst[y,x] = src[x,y]}.
 \smallskip
 \noindent Examples:
 \begin{code}
-    ImageBuf A ("tahoe.exr");
+    ImageBuf A ("grid.jpg");
     ImageBuf B;
     ImageBufAlgo::transpose (B, A);
 \end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg}
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/transpose.jpg} \\
 \apiend
 
 
@@ -411,15 +519,117 @@ shift of $[0,1,2,3,4,5]$ by $+2$ is $[4,5,0,1,2,3]$.
 \smallskip
 \noindent Examples:
 \begin{code}
-    ImageBuf A ("tahoe.exr");
+    ImageBuf A ("grid.jpg");
     ImageBuf B;
-    ImageBufAlgo::circular_shift (B, A, 200, 100);
+    ImageBufAlgo::circular_shift (B, A, 70, 30);
+\end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg} 
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/cshift.jpg} \\
+\apiend
+
+
+\apiitem{bool {\ce rotate} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc float angle, \\
+        \bigspc string_view filtername="", float filtersize=0, \\
+        \bigspc bool recompute_roi = false, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0) \\
+bool {\ce rotate} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc float angle, \\
+        \bigspc Filter2D *filter, \\
+        \bigspc bool recompute_roi = false, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0) \\
+bool {\ce rotate} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc float angle, float center_x, float center_y, \\
+        \bigspc string_view filtername="", float filtersize=0, \\
+        \bigspc bool recompute_roi = false, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0) \\
+bool {\ce rotate} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc float angle, float center_x, float center_y, \\
+        \bigspc Filter2D *filter, \\
+        \bigspc bool recompute_roi = false, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!rotate} \indexapi{rotate}
+\NEW % 1.5
+
+Rotate the {\cf src} image by the {\cf angle} (in radians, with positive
+angles clockwise). When {\cf center_x} and {\cf center_y} are supplied, they
+denote the center of rotation; in their absence, the rotation will be about
+the center of the image's display window.
+
+Only the pixels (and channels) of {\cf dst} that are specified by {\cf roi}
+will be copied from the rotated {\cf src}; the default {\cf roi} is to alter
+all the pixels in {\cf dst}. If {\cf dst} is uninitialized, it will be
+resized to be an ImageBuf large enough to hold the rotated image  if
+{\cf recompute_roi} is {\cf true}, or will have the same ROI as {\cf src}
+if {\cf recompute_roi} is false. It is an
+error to pass both an uninitialied {\cf dst} and an undefined {\cf roi}.
+
+The caller may explicitly pass a reconstruction filter, or specify one by
+name and size, or if the name is the empty string {\cf rotate()} will choose
+a reasonable high-quality default if \NULL is passed.  The filter is used to
+weight the {\cf src} pixels falling underneath it for each {\cf dst} pixel;
+the filter's size is expressed in pixel units of the {\cf dst} image.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    ImageBuf Src ("tahoe.exr");
+    ImageBuf Dst;
+    ImageBufAlgo::rotate (Dst, Src, 45.0);
+\end{code}
+\spc \includegraphics[width=1.25in]{figures/grid-small.jpg} 
+~ {\Huge $\rightarrow$} ~
+\includegraphics[width=1.25in]{figures/rotate45.jpg} \\
+\apiend
+
+
+\apiitem{bool {\ce warp} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc const Imath::M33f \&M, \\
+        \bigspc string_view filtername="", float filtersize=0, \\
+        \bigspc bool recompute_roi = false, \\
+        \bigspc ImageBuf::WrapMode wrap = ImageBuf::WrapDefault, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0) \\
+bool {\ce warp} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc const Imath::M33f \&M, \\
+        \bigspc Filter2D *filter, \\
+        \bigspc bool recompute_roi = false, \\
+        \bigspc ImageBuf::WrapMode wrap = ImageBuf::WrapDefault, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!warp} \indexapi{warp}
+\NEW % 1.5
+
+Warp the {\cf src} image using the supplied 3x3 transformation matrix {\cf M}.
+
+Only the pixels (and channels) of {\cf dst} that are specified by {\cf roi}
+will be copied from the warped {\cf src}; the default {\cf roi} is to alter
+all the pixels in {\cf dst}. If {\cf dst} is uninitialized, it will be
+resized to be an \ImageBuf large enough to hold the warped image if
+{\cf recompute_roi} is {\cf true}, or will have the same ROI as {\cf src}
+if {\cf recompute_roi} is false. It is an
+error to pass both an uninitialied {\cf dst} and an undefined {\cf roi}.
+
+The caller may explicitly pass a reconstruction filter, or specify one by
+name and size, or if the name is the empty string {\cf resize()} will choose
+a reasonable high-quality default if \NULL is passed.  The filter is used to
+weight the {\cf src} pixels falling underneath it for each {\cf dst} pixel;
+the filter's size is expressed in pixel units of the {\cf dst} image.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    Imath::M33f M ( 0.7071068, 0.7071068, 0,
+                   -0.7071068, 0.7071068, 0,
+                   20,        -8.284271,  1);
+    ImageBuf Src ("tahoe.exr");
+    ImageBuf Dst;
+    ImageBufAlgo::warp (dst, src, M, "lanczos3");
 \end{code}
 \apiend
 
 
 \apiitem{bool {\ce resize} (ImageBuf \&dst, const ImageBuf \&src, \\
-        \bigspc  const std::string filtername="", float filtersize=0, \\
+        \bigspc  string_view filtername="", float filtersize=0, \\
         \bigspc  ROI roi=ROI::All(), int nthreads=0) \\
 bool {\ce resize} (ImageBuf \&dst, const ImageBuf \&src, \\
         \bigspc Filter2D *filter, \\
@@ -434,7 +644,7 @@ The caller may explicitly pass a reconstruction filter, or specify one by
 name and size, or if the name is the empty string {\cf resize()} will choose
 a reasonable high-quality default if \NULL is passed.  The filter is used to
 weight the {\cf src} pixels falling underneath it for each {\cf dst} pixel;
-the filter's size is expressed in pixel units of the dst image.
+the filter's size is expressed in pixel units of the {\cf dst} image.
 
 \smallskip
 \noindent Examples:
@@ -512,7 +722,7 @@ All of the images must have the same number of channels.
 
 
 
-\apiitem{bool sub (ImageBuf \&dst, const ImageBuf \&A, const ImageBuf \&B, \\
+\apiitem{bool {\ce sub} (ImageBuf \&dst, const ImageBuf \&A, const ImageBuf \&B, \\
         \bigspc  ROI roi=ROI::All(), int nthreads=0) \\
 bool {\ce sub} (ImageBuf \&dst, const ImageBuf \&A, float B, \\
         \bigspc ROI roi=ROI::All(), int nthreads=0) \\
@@ -563,6 +773,28 @@ All of the images must have the same number of channels.
     ROI roi = get_roi (A.spec());
     roi.chbegin = 0;  roi.chend = 3;
     ImageBufAlgo::mul (A, A, 0.5, roi);
+\end{code}
+\apiend
+
+
+\apiitem{bool {\ce pow} (ImageBuf \&dst, const ImageBuf \&A, float b, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0) \\
+bool {\ce pow} (ImageBuf \&dst, const ImageBuf \&A, const float *b, \\
+        \bigspc ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!pow} \indexapi{pow}
+
+For all pixels within the designated region, raise the pixel value to the
+power {\cf b} (channel by channel), putting the result in
+{\cf dst}.  The value {\cf b} is either a single 
+float (applied to all channels) or a per-channel float array.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    // Gamma-correct by 2.2 channels 0-2 of the image
+    ROI roi = get_roi (A.spec());
+    roi.chbegin = 0;  roi.chend = 3;
+    ImageBufAlgo::mul (A, A, 1.0f/2.2f, roi);
 \end{code}
 \apiend
 
@@ -1002,7 +1234,7 @@ stored.
 
 
 \apiitem{std::string {\ce computePixelHashSHA1} (const ImageBuf \&src, \\
-  \bigspc\bigspc const std::string \&extrainfo = "", \\
+  \bigspc\bigspc string_view extrainfo = "", \\
   \bigspc\bigspc  ROI roi=ROI::All(), int blocksize=0, int nthreads=0)}
 \index{ImageBufAlgo!computePixelHashSHA1} \indexapi{computePixelHashSHA1}
 
@@ -1052,7 +1284,7 @@ the number of pixels whose value was $>$ {\cf max}.
     float binsize = (max-min)/nbins;
     for (int i = 0;  i < nbins;  ++i)
         hist[i] << " pixels that are >= " << (min+i*binsize) << " and "
-                << (i == nbins-1 ? "<= " : "< ")
+                << (i == nbins-1 ? " <= " : " < ")
                 << (min+(i+1)*binsize) << "\n";
     std::cout << submin << " pixels < " << min << "\n";
     std::cout << supermax << " pixels > " << max << "\n";
@@ -1079,7 +1311,7 @@ the number of pixels whose value was $>$ {\cf max}.
 \section{Convolutions}
 \label{sec:iba:convolutions}
 
-\apiitem{bool {\ce make_kernel} (ImageBuf \&dst, const char *name, \\
+\apiitem{bool {\ce make_kernel} (ImageBuf \&dst, string_view name, \\
   \bigspc\spc float width, float height, float depth = 1.0f, \\
   \bigspc\spc                         bool normalize = true)}
 \index{ImageBufAlgo!make_kernel} \indexapi{make_kernel}
@@ -1097,7 +1329,8 @@ caution!
 
 Kernel names can be: \qkw{gaussian}, \qkw{sharp-gaussian}, \qkw{box},
 \qkw{triangle}, \qkw{mitchell}, \qkw{blackman-harris}, \qkw{b-spline},
-\qkw{catmull-rom}, \qkw{lanczos3}, \qkw{disk}, \qkw{binomial}. Note that
+\qkw{catmull-rom}, \qkw{lanczos3}, \qkw{cubic}, \qkw{keys}, \qkw{simon},
+\qkw{rifman}, \qkw{disk}, \qkw{binomial}. Note that
 \qkw{catmull-rom} and \qkw{lanczos3} are fixed-size kernels that don't
 scale with the width, and are therefore probably less useful in most
 cases.
@@ -1163,9 +1396,48 @@ by $1/\sqrt{\mathrm{npixels}}$.
     ImageBufAlgo::fft (Freq, Src);
 
     // At this point, Freq is a 2-channel float image (real, imag)
-    // Convert it back from frequency domain to a spatial iamge
+    // Convert it back from frequency domain to a spatial image
     ImageBuf Spatial;
     ImageBufAlgo::ifft (Spatial, Freq);
+\end{code}
+\apiend
+
+\apiitem{bool {\ce complex_to_polar} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc  ROI roi=ROI::All(), int nthreads=0) \\
+        bool {\ce polar_to_complex} (ImageBuf \&dst, const ImageBuf \&src, \\
+        \bigspc  ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!complex_to_polar} \indexapi{complex_to_polar}
+\index{ImageBufAlgo!polar_to_complex} \indexapi{polar_to_complex}
+
+The {\cf polar_to_complex()} function transforms a 2-channel image whose
+channels are interpreted as complex values (real and imaginary components)
+into the equivalent values expressed in polar form of amplitude and phase
+(with phase between $0$ and $2\pi$).
+
+The {\cf complex_to_polar()} function performs the reverse transformation,
+converting from  polar values (amplitude and phase) to complex (real and
+imaginary).
+
+In either case,  the section of {\cf src} denoted by {\cf roi} is
+transformed, storing the result in {\cf dst}. If {\cf roi} is not defined,
+it will be all of {\cf src}'s pixels.  Only the first two channels of {\cf
+src} will be transformed.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    // Suppose we have a set of frequency space values expressed as
+    // amplitudes and phase...
+    ImageBuf Polar ("polar.exr");
+
+    // Convert to complex representation
+    ImageBuf Complex;
+    ImageBufAlgo::complex_to_polar (Complex, Polar);
+
+    // Now, it's safe to take an IFFT of the complex image.
+    // Convert it back from frequency domain to a spatial image.
+    ImageBuf Spatial;
+    ImageBufAlgo::ifft (Spatial, Complex);
 \end{code}
 \apiend
 
@@ -1234,8 +1506,34 @@ of src was < 1, dst will have a pixel color that is a plausible
 \apiend
 
 
+\apiitem{bool {\ce median_filter} (ImageBuf \&dst, const ImageBuf \&src, \\
+  \bigspc\spc int width = 3, int height = -1,
+  \bigspc\spc  ROI roi=ROI::All(), int nthreads=0)}
+\index{ImageBufAlgo!median_filter} \indexapi{median_filter}
+
+\NEW % 1.5
+Replace the given ROI of {\cf dst} with a median-filtered version of the
+corresponding region of {\cf src}.  The median filter replaces each pixel
+with the median value underneath the $\mathit{width} \times \mathit{height}$
+window surrounding it. If the height is $< 1$, it will be set to width,
+making a square window. The median filter tends to smooth out noise and
+small high frequency details that are smaller than the window size, while
+preserving the sharpness of long edges.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    ImageBuf Noisy ("tahoe.exr");
+    ImageBuf Clean;
+    ImageBufAlgo::median_filter (Clean, Noisy, 3, 3);
+\end{code}
+
+%FIXME - example would be good here
+\apiend
+
+
 \apiitem{bool {\ce unsharp_mask} (ImageBuf \&dst, const ImageBuf \&src, \\
-  \bigspc\spc const char *kernel = "gaussian", float width = 3.0f, \\
+  \bigspc\spc string_view kernel = "gaussian", float width = 3.0f, \\
   \bigspc\spc float contrast = 1.0f, float threshold = 0.0f, \\
   \bigspc\spc  ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!unsharp_mask} \indexapi{unsharp_mask}
@@ -1251,8 +1549,14 @@ Roughly speaking,
      dst = src + contrast * thresh(src - blur(src))
 \end{code}
 
-The specific blur can be selected by kernel name and width.  The
-{\cf contrast} is a multiplier on the overall sharpening effect.  The
+The specific blur can be selected by kernel name and width (for example,
+\qkw{gaussian} is typical). As a special case, \qkw{median} is also accepted
+as the kernel name, in which case a median filter is performed rather than
+a blurring convolution (Gaussian and other blurs sometimes over-sharpen edges,
+whereas using the median filter will sharpen compact high-frequency details
+while not over-sharpening long edges).
+
+The {\cf contrast} is a multiplier on the overall sharpening effect.  The
 thresholding step causes all differences less than {\cf threshold} to be
 squashed to zero, which can be useful for suppressing sharpening of
 low-contrast details (like noise) but allow sharpening of
@@ -1272,7 +1576,7 @@ higher-contrast edges.
 \label{sec:iba:color}
 
 \apiitem{bool {\ce colorconvert} (ImageBuf \&dst, const ImageBuf \&src, \\
-  \bigspc\spc const char *from, const char *to, bool unpremult=false, \\
+  \bigspc\spc string_view from, string_view to, bool unpremult=false, \\
   \bigspc\spc  ROI roi=ROI::All(), int nthreads=0) \\
 bool {\ce colorconvert} (ImageBuf \&dst, const ImageBuf \&src, \\
   \bigspc\spc const ColorProcessor *processor, bool unpremult=false, \\
@@ -1323,9 +1627,9 @@ to \qkw{linear} and vice versa.
 \apiend
 
 \apiitem{bool {\ce ociolook} (ImageBuf \&dst, const ImageBuf \&src, \\
-  \bigspc\spc const char *looks, const char *from, const char *to, \\
+  \bigspc\spc string_view looks, string_view from, string_view to, \\
   \bigspc\spc bool inverse=false, bool unpremult=false, \\
-  \bigspc\spc const char *key=NULL, const char *value=NULL, \\
+  \bigspc\spc string_view key="", string_view value="", \\
   \bigspc\spc ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!ociolook} \indexapi{ociolook}
 Copy pixels from {\cf src} to {\cf dst} (within the ROI), while
@@ -1353,16 +1657,16 @@ this flag if your image contains an alpha channel.
 
 
 \apiitem{bool {\ce ociodisplay} (ImageBuf \&dst, const ImageBuf \&src, \\
-  \bigspc\spc const char *display, const char *view, \\
-  \bigspc\spc const char *from=NULL, const char *looks=NULL,\\
+  \bigspc\spc string_view display, string_view view, \\
+  \bigspc\spc string_view from="", string_view looks="",\\
   \bigspc\spc bool unpremult=false, \\
-  \bigspc\spc const char *key=NULL, const char *value=NULL, \\
+  \bigspc\spc string_view key="", string_view value="", \\
   \bigspc\spc ROI roi=ROI::All(), int nthreads=0)}
 \index{ImageBufAlgo!ociodisplay} \indexapi{ociodisplay}
 Copy pixels from {\cf src} to {\cf dst} (within the ROI), while
 applying an OpenColorIO ``display'' transform to the pixel values.
 In-place operations ({\cf dst} and {\cf src} being the same image)
-are supported.  If {\cf from} or {\cf looks} are {\cf NULL}, it will not
+are supported.  If {\cf from} or {\cf looks} are empty, it will not
 override the look or source color space (subtly different than
 passing \qkw{}, the empty string, which means to use no look or source
 space).  The {\cf key} and {\cf value} may optionally be used
@@ -1435,11 +1739,11 @@ if there is no identified alpha channel
 \label{sec:iba:importexport}
 
 \apiitem{bool {\ce make_texture} (MakeTextureMode mode, const ImageBuf \&input, \\
-\bigspc                             const std::string \&outputfilename,
+\bigspc                             string_view outputfilename,
                              const ImageSpec \&config,\\
 \bigspc                             std::ostream *outstream = NULL) \\
-bool {\ce make_texture} (MakeTextureMode mode, const std::string \&filename, \\
-\bigspc                             const std::string \&outputfilename,
+bool {\ce make_texture} (MakeTextureMode mode, string_view filename, \\
+\bigspc                             string_view outputfilename,
                              const ImageSpec \&config,\\
 \bigspc                             std::ostream *outstream = NULL)}
 \index{ImageBufAlgo!make_texture} \indexapi{make_texture}

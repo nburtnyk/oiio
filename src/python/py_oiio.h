@@ -35,10 +35,10 @@
 #undef SIZEOF_LONG
 #include <boost/python.hpp>
 
-#include "imageio.h"
-#include "typedesc.h"
-#include "imagecache.h"
-#include "imagebuf.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/imagecache.h"
+#include "OpenImageIO/imagebuf.h"
 
 
 #if PY_MAJOR_VERSION < 2 || (PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION < 5)
@@ -64,6 +64,8 @@ void declare_paramvalue();
 void declare_global();
 
 bool PyProgressCallback(void*, float);
+object C_array_to_Python_array (const char *data, TypeDesc type, size_t size);
+
 
 
 // Suck up one or more presumed T values into a vector<T>

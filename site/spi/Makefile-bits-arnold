@@ -8,6 +8,8 @@ $(info Including spi/Makefile-bits-arnold)
 
 # Default namespace
 NAMESPACE ?= 'OpenImageIO_Arnold'
+PYVER ?= 2.6
+PYVERNOSPACE=${shell echo ${PYVER} | sed "s/\\.//"}
 
 ## Official OS X build machines with special conventions
 ifeq (${SP_OS}, lion)
@@ -32,6 +34,8 @@ ifeq (${platform}, macosx)
     MY_CMAKE_FLAGS += \
         -DBUILD_WITH_INSTALL_RPATH=1 \
         -DCMAKE_INSTALL_NAME_DIR="${working_dir}/dist/${platform}${variant}/lib"
+    # All our Mac laptops seem to be at least SSE 4.2
+    USE_SIMD = sse4.2
 endif
 
 
@@ -54,7 +58,7 @@ ifeq ($(SP_OS), spinux1)
 
     ## custom compiler: clang
     ifeq (${LLVM_DIRECTORY},)
-        LLVM_DIRECTORY := /shots/spi/home/lib/arnold/spinux1/llvm_3.3
+        LLVM_DIRECTORY := /shots/spi/home/lib/arnold/spinux1/llvm_3.4.1
     endif
 
     ## default compiler is clang
@@ -65,15 +69,28 @@ ifeq ($(SP_OS), spinux1)
     endif
 
     ifeq (${COMPILER}, gcc463)
-    MY_CMAKE_FLAGS += \
+      MY_CMAKE_FLAGS += \
          -DCMAKE_C_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.6.3-test/bin/gcc \
          -DCMAKE_CXX_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.6.3-test/bin/g++
     endif
     ifeq (${COMPILER}, gcc470)
-    MY_CMAKE_FLAGS += \
+      MY_CMAKE_FLAGS += \
          -DCMAKE_C_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.7.0-test/bin/gcc \
          -DCMAKE_CXX_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.7.0-test/bin/g++
     endif
+    ifeq (${COMPILER}, gcc472)
+      MY_CMAKE_FLAGS += \
+         -DCMAKE_C_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.7.2-test/bin/gcc \
+         -DCMAKE_CXX_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.7.2-test/bin/g++
+    endif
+    ifeq (${COMPILER}, gcc490)
+      MY_CMAKE_FLAGS += \
+         -DCMAKE_C_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.9-20130512-test/bin/gcc \
+         -DCMAKE_CXX_COMPILER=/net/soft_scratch/apps/arnold/tools/gcc-4.9-20130512-test/bin/g++
+    endif
+
+    # Our minimal architecture for workstations and farm supports SSE 4.1
+    USE_SIMD = sse4.1
 
     ifneq (,$(wildcard /usr/include/OpenEXR2))
         MY_CMAKE_FLAGS += \
@@ -106,12 +123,16 @@ ifeq ($(SP_OS), spinux1)
 	BOOSTVERS=1.51
     endif
     BOOSTVERS_SUFFIX = -${shell echo ${BOOSTVERS} | sed "s/\\./_/"}
+    CONSTRUCTED_BOOSTVERS = ${shell echo ${BOOSTVERS} | sed "s/\\./0/"}00
     MY_CMAKE_FLAGS += \
 	-DBOOST_CUSTOM=1 \
+    -DBoost_VERSION=${CONSTRUCTED_BOOSTVERS} \
 	-DBoost_INCLUDE_DIRS=/usr/include/boost_${BOOSTVERS} \
 	-DBoost_LIBRARY_DIRS=/usr/lib64/boost_${BOOSTVERS} \
-	-DBoost_python_FOUND=1 -Doiio_boost_PYTHON_FOUND=1 \
-	-DBoost_LIBRARIES:STRING="/usr/lib64/boost_${BOOSTVERS}/libboost_python-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_filesystem-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_filesystem-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_regex-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_system-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_thread-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/libpython2.6.so"
+	-DBoost_python_FOUND=1 -Doiio_boost_PYTHON_FOUND=1 -DPYTHONLIBS_FOUND=1 \
+    -DBoost_LIBRARIES:STRING="/usr/lib64/boost_${BOOSTVERS}/libboost_filesystem-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_filesystem-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_regex-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_system-gcc44-mt${BOOSTVERS_SUFFIX}.so;/usr/lib64/boost_${BOOSTVERS}/libboost_thread-gcc44-mt${BOOSTVERS_SUFFIX}.so" \
+    -DBoost_Python_LIBRARIES:STRING="/usr/lib64/boost_${BOOSTVERS}/libboost_python-gcc44-mt${BOOSTVERS_SUFFIX}.so" \
+    -DPYTHON_LIBRARIES:STRING="/usr/lib64/libpython${PYVER}.so"
 
 endif  # endif spinux1
 

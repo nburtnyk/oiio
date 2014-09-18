@@ -26,9 +26,11 @@ reading and writing capabilities for other image formats, and any
 application that uses \product would be able to use those plugins.
 
 The library also implements the helper class {\kw ImageBuf}, which is a
-handy way to store and manipulate images in memory.  {\kw ImageBuf}
-itself uses \ImageInput and \ImageOutput for its file I/O, and therefore
-is also agnostic as to image file formats.
+handy way to store and manipulate images in memory.  {\kw ImageBuf} itself
+uses \ImageInput and \ImageOutput for its file I/O, and therefore is also
+agnostic as to image file formats. A variety of functions in the {\cf
+ImageBufAlgo} namespace are available to perform image processing operations
+on {\cf ImageBuf}'s.
 
 The {\kw ImageCache} class transparently manages a cache so that it can
 access truly vast amounts of image data (thousands of image files
@@ -41,7 +43,8 @@ Finally, the \product distribution contains several utility programs
 that operate on images, each of which is built atop \ImageInput and
 \ImageOutput, and therefore may read or write any image file type for
 which an appropriate plugin is found at runtime.  Paramount among these
-utilities is {\fn iv}, a really fantastic and powerful image viewing
+utilities {\cf oiiotool}, a command-line image processing engine, and
+{\fn iv}, an image viewing
 application.  Additionally, there are programs for converting images
 among different formats, comparing image data between two images, 
 and examining image metadata.
@@ -212,8 +215,6 @@ Graphics, Inc. \\ {\cf http://www.remotesensing.org/libtiff}
 {\cf http://www.zlib.net}
 \item {\cf libpng} \copyright\ 1998-2008 Glenn Randers-Pehrson, et al.  
 {\cf http://www.libpng.org}
-\item Thread Building Blocks (TBB) \copyright\ 2005--2008 Intel Corporation.\\
-{\cf http://www.threadingbuildingblocks.org/}
 \item The SHA-1 implemenation we use is public domain by
 Dominik Reichl \\ {\cf http://www.dominik-reichl.de/}
 \item Boost \copyright\ various authors. {\cf http://www.boost.org}
@@ -240,8 +241,10 @@ Dominik Reichl \\ {\cf http://www.dominik-reichl.de/}
 \item {\cf KissFFT} \copyright 2003--2010 Mark Borgerding (BSD Licensed). 
 {\cf http://sourceforge.net/projects/kissfft/}
 \item {\cf GIFLIB} \copyright 1997 Eric S. Raymond (MIT Licensed).
-% https://launchpad.net/ubuntu/precise/+source/giflib/+copyright
 {\cf http://giflib.sourceforge.net/}
+\item {\cf LibRaw} \copyright 2008-2013 LibRaw LLC (LGPL, CDDL, and LibRaw
+     licenses).
+{\cf http://www.libraw.org/}
 \end{itemize}
 
 These other packages are all distributed under licenses that allow them

@@ -40,12 +40,10 @@
 #include <iostream>
 #include <limits>
 
-#include "imagebuf.h"
-#include "imagebufalgo.h"
-#include "imagebufalgo_util.h"
-#include "dassert.h"
-#include "sysutil.h"
-#include "thread.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/imagebufalgo.h"
+#include "OpenImageIO/imagebufalgo_util.h"
+#include "OpenImageIO/dassert.h"
 
 
 
@@ -101,10 +99,11 @@ ImageBufAlgo::clamp (ImageBuf &dst, const ImageBuf &src,
         maxvec.resize (dst.nchannels(), std::numeric_limits<float>::max());
         max = &maxvec[0];
     }
-    OIIO_DISPATCH_TYPES2 ("clamp", clamp_, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "clamp", clamp_, dst.spec().format,
                           src.spec().format, dst, src,
                           min, max, clampalpha01, roi, nthreads);
-    return false;
+    return ok;
 }
 
 
@@ -198,10 +197,11 @@ ImageBufAlgo::add (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
 {
     if (! IBAprep (roi, &dst, &A, &B))
         return false;
-    OIIO_DISPATCH_COMMON_TYPES3 ("add", add_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES3 (ok, "add", add_impl, dst.spec().format,
                                  A.spec().format, B.spec().format,
                                  dst, A, B, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -212,9 +212,10 @@ ImageBufAlgo::add (ImageBuf &dst, const ImageBuf &A, const float *b,
 {
     if (! IBAprep (roi, &dst, &A))
         return false;
-    OIIO_DISPATCH_TYPES2 ("add", add_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "add", add_impl, dst.spec().format,
                           A.spec().format, dst, A, b, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -229,8 +230,10 @@ ImageBufAlgo::add (ImageBuf &dst, const ImageBuf &A, float b,
     float *vals = ALLOCA (float, nc);
     for (int c = 0;  c < nc;  ++c)
         vals[c] = b;
-    OIIO_DISPATCH_TYPES2 ("add", add_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "add", add_impl, dst.spec().format,
                           A.spec().format, dst, A, vals, roi, nthreads);
+    return ok;
 }
 
 
@@ -285,10 +288,11 @@ ImageBufAlgo::sub (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
 {
     if (! IBAprep (roi, &dst, &A, &B))
         return false;
-    OIIO_DISPATCH_COMMON_TYPES3 ("sub", sub_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES3 (ok, "sub", sub_impl, dst.spec().format,
                                  A.spec().format, B.spec().format,
                                  dst, A, B, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -303,9 +307,10 @@ ImageBufAlgo::sub (ImageBuf &dst, const ImageBuf &A, const float *b,
     float *vals = ALLOCA (float, nc);
     for (int c = 0;  c < nc;  ++c)
         vals[c] = -b[c];
-    OIIO_DISPATCH_TYPES2 ("sub", add_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "sub", add_impl, dst.spec().format,
                           A.spec().format, dst, A, vals, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -320,8 +325,10 @@ ImageBufAlgo::sub (ImageBuf &dst, const ImageBuf &A, float b,
     float *vals = ALLOCA (float, nc);
     for (int c = 0;  c < nc;  ++c)
         vals[c] = -b;
-    OIIO_DISPATCH_TYPES2 ("sub", add_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "sub", add_impl, dst.spec().format,
                           A.spec().format, dst, A, vals, roi, nthreads);
+    return ok;
 }
 
 
@@ -359,10 +366,11 @@ ImageBufAlgo::mul (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
 {
     if (! IBAprep (roi, &dst, &A, &B))
         return false;
-    OIIO_DISPATCH_COMMON_TYPES3 ("mul", mul_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES3 (ok, "mul", mul_impl, dst.spec().format,
                                  A.spec().format, B.spec().format,
                                  dst, A, B, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -395,9 +403,10 @@ ImageBufAlgo::mul (ImageBuf &dst, const ImageBuf &A, const float *b,
 {
     if (! IBAprep (roi, &dst, &A))
         return false;
-    OIIO_DISPATCH_TYPES2 ("mul", mul_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "mul", mul_impl, dst.spec().format,
                           A.spec().format, dst, A, b, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -412,8 +421,10 @@ ImageBufAlgo::mul (ImageBuf &dst, const ImageBuf &A, float b,
     float *vals = ALLOCA (float, nc);
     for (int c = 0;  c < nc;  ++c)
         vals[c] = b;
-    OIIO_DISPATCH_TYPES2 ("mul", mul_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "mul", mul_impl, dst.spec().format,
                           A.spec().format, dst, A, vals, roi, nthreads);
+    return ok;
 }
 
 
@@ -432,6 +443,62 @@ ImageBufAlgo::mul (ImageBuf &dst, float val, ROI roi, int nthreads)
 {
     return mul (dst, dst, val, roi, nthreads);
 }
+
+
+
+template<class Rtype, class Atype>
+static bool
+pow_impl (ImageBuf &R, const ImageBuf &A, const float *b,
+          ROI roi, int nthreads)
+{
+    if (nthreads != 1 && roi.npixels() >= 1000) {
+        // Possible multiple thread case -- recurse via parallel_image
+        ImageBufAlgo::parallel_image (
+            boost::bind(pow_impl<Rtype,Atype>, boost::ref(R), boost::cref(A), b,
+                        _1 /*roi*/, 1 /*nthreads*/),
+            roi, nthreads);
+        return true;
+    }
+
+    ImageBuf::ConstIterator<Atype> a (A, roi);
+    for (ImageBuf::Iterator<Rtype> r (R, roi);  !r.done();  ++r, ++a)
+        for (int c = roi.chbegin;  c < roi.chend;  ++c)
+            r[c] = pow (a[c], b[c]);
+    return true;
+}
+
+
+bool
+ImageBufAlgo::pow (ImageBuf &dst, const ImageBuf &A, const float *b,
+                   ROI roi, int nthreads)
+{
+    if (! IBAprep (roi, &dst, &A))
+        return false;
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "pow", pow_impl, dst.spec().format,
+                          A.spec().format, dst, A, b, roi, nthreads);
+    return ok;
+}
+
+
+
+bool
+ImageBufAlgo::pow (ImageBuf &dst, const ImageBuf &A, float b,
+                   ROI roi, int nthreads)
+{
+    if (! IBAprep (roi, &dst, &A))
+        return false;
+    int nc = A.nchannels();
+    float *vals = ALLOCA (float, nc);
+    for (int c = 0;  c < nc;  ++c)
+        vals[c] = b;
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "pow", pow_impl, dst.spec().format,
+                          A.spec().format, dst, A, vals, roi, nthreads);
+    return ok;
+}
+
+
 
 
 
@@ -482,10 +549,11 @@ ImageBufAlgo::channel_sum (ImageBuf &dst, const ImageBuf &src,
         weights = &local_weights[0];
     }
 
-    OIIO_DISPATCH_TYPES2 ("channel_sum", channel_sum_,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "channel_sum", channel_sum_,
                           dst.spec().format, src.spec().format,
                           dst, src, weights, roi, nthreads);
-    return false;
+    return ok;
 }
 
 
@@ -686,10 +754,11 @@ ImageBufAlgo::rangecompress (ImageBuf &dst, const ImageBuf &src,
     }
     if (! IBAprep (roi, &dst, &src))
         return false;
-    OIIO_DISPATCH_TYPES2 ("rangecompress", rangecompress_,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "rangecompress", rangecompress_,
                           dst.spec().format, src.spec().format,
                           dst, src, useluma, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -704,10 +773,11 @@ ImageBufAlgo::rangeexpand (ImageBuf &dst, const ImageBuf &src,
     }
     if (! IBAprep (roi, &dst))
         return false;
-    OIIO_DISPATCH_TYPES2 ("rangeexpand", rangeexpand_,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "rangeexpand", rangeexpand_,
                           dst.spec().format, src.spec().format,
                           dst, src, useluma, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -788,9 +858,10 @@ ImageBufAlgo::unpremult (ImageBuf &dst, const ImageBuf &src,
                           roi.chbegin, src, roi, nthreads);
         return true;
     }
-    OIIO_DISPATCH_TYPES2 ("unpremult", unpremult_, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "unpremult", unpremult_, dst.spec().format,
                           src.spec().format, dst, src, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -856,9 +927,10 @@ ImageBufAlgo::premult (ImageBuf &dst, const ImageBuf &src,
                           roi.chbegin, src, roi, nthreads);
         return true;
     }
-    OIIO_DISPATCH_TYPES2 ("premult", premult_, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "premult", premult_, dst.spec().format,
                           src.spec().format, dst, src, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -1119,7 +1191,8 @@ ImageBufAlgo::over (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
     if (! IBAprep (roi, &dst, &A, &B, NULL,
                    IBAprep_REQUIRE_ALPHA | IBAprep_REQUIRE_SAME_NCHANNELS))
         return false;
-    OIIO_DISPATCH_COMMON_TYPES3 ("over", over_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES3 (ok, "over", over_impl, dst.spec().format,
                                  A.spec().format, B.spec().format,
                                  dst, A, B, false, false, roi, nthreads);
     return ! dst.has_error();
@@ -1135,7 +1208,8 @@ ImageBufAlgo::zover (ImageBuf &dst, const ImageBuf &A, const ImageBuf &B,
                    IBAprep_REQUIRE_ALPHA | IBAprep_REQUIRE_Z |
                    IBAprep_REQUIRE_SAME_NCHANNELS))
         return false;
-    OIIO_DISPATCH_COMMON_TYPES3 ("zover", over_impl, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES3 (ok, "zover", over_impl, dst.spec().format,
                                  A.spec().format, B.spec().format,
                                  dst, A, B, true, z_zeroisinf, roi, nthreads);
     return ! dst.has_error();

@@ -663,9 +663,21 @@ resulting deep data in a special {\cf DeepData} structure, defined in
         std::vector<char> data;          // for each sample [z][y][x][c][s]
 
         DeepData ();
+        // Set the size and allocate the nsamples[] vector.
         void init (int npix, int nchan,
                    const TypeDesc *chbegin, const TypeDesc *chend);
+        // After nsamples[] has been filled in, allocate enough scratch space
+        // for data and set up all the pointers.
         void alloc ();
+        // Clear the vectors and reset size to 0.
+        void clear ();
+        // Deallocate all space in the vectors
+        void free ();
+        // Retrieve the pointer to the first sample of the given pixel and
+        // channel. Return NULL if there are no samples for that pixel.
+        void *channel_ptr (int pixel, int channel) const;
+        // Retrieve sample value within a pixel, cast to a float.
+        float deep_value (int pixel, int channel, int sample) const;
     };
 \end{code}
 
@@ -1052,7 +1064,7 @@ The function will internally either call {\kw read_scanlines} or
 {\kw read_tiles}, depending on whether the file is scanline- or
 tile-oriented.
 
-Because this may be an expensive operation, a progres callback may be passed.
+Because this may be an expensive operation, a progress callback may be passed.
 Periodically, it will be called as follows:\\
 \begin{code}
     progress_callback (progress_callback_data, float done)

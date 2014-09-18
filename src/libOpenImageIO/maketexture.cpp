@@ -44,19 +44,19 @@
 #include <OpenEXR/ImathMatrix.h>
 #include <OpenEXR/half.h>
 
-#include "argparse.h"
-#include "dassert.h"
-#include "filesystem.h"
-#include "fmath.h"
-#include "strutil.h"
-#include "sysutil.h"
-#include "timer.h"
-#include "imageio.h"
-#include "imagebuf.h"
-#include "imagebufalgo.h"
-#include "imagebufalgo_util.h"
-#include "thread.h"
-#include "filter.h"
+#include "OpenImageIO/argparse.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/fmath.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/sysutil.h"
+#include "OpenImageIO/timer.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/imagebufalgo.h"
+#include "OpenImageIO/imagebufalgo_util.h"
+#include "OpenImageIO/thread.h"
+#include "OpenImageIO/filter.h"
 
 OIIO_NAMESPACE_USING
 
@@ -190,8 +190,10 @@ static bool
 copy_block (ImageBuf &dst, const ImageBuf &src, ROI roi)
 {
     ASSERT (dst.spec().format == TypeDesc::TypeFloat);
-    OIIO_DISPATCH_TYPES ("copy_block", copy_block_, src.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "copy_block", copy_block_, src.spec().format,
                          dst, src, roi);
+    return ok;
 }
 
 
@@ -264,7 +266,7 @@ resize_block_ (ImageBuf &dst, const ImageBuf &src, ROI roi, bool envlatlmode)
                         srcspec.z+srcspec.depth < srcspec.full_z+srcspec.full_depth);
 
     const ImageSpec &dstspec (dst.spec());
-    float *pel = (float *) alloca (dstspec.pixel_bytes());
+    float *pel = ALLOCA (float, dstspec.nchannels);
     float xoffset = (float) dstspec.full_x;
     float yoffset = (float) dstspec.full_y;
     float xscale = 1.0f / (float)dstspec.full_width;
@@ -358,6 +360,7 @@ resize_block (ImageBuf &dst, const ImageBuf &src, ROI roi, bool envlatlmode,
     const ImageSpec &dstspec (dst.spec());
     DASSERT (dstspec.nchannels == srcspec.nchannels);
     DASSERT (dst.localpixels());
+    bool ok;
     if (src.localpixels() &&                      // Not a cached image
         !envlatlmode &&                           // not latlong wrap mode
         roi.xbegin == 0 &&                        // Region x at origin
@@ -368,13 +371,14 @@ resize_block (ImageBuf &dst, const ImageBuf &src, ROI roi, bool envlatlmode,
         srcspec.x == 0 && srcspec.y == 0) {
         // If all these conditions are met, we have a special case that
         // can be more highly optimized.
-        OIIO_DISPATCH_TYPES("resize_block_2pass", resize_block_2pass,
-                            srcspec.format, dst, src, roi, allow_shift);
+        OIIO_DISPATCH_TYPES (ok, "resize_block_2pass", resize_block_2pass,
+                             srcspec.format, dst, src, roi, allow_shift);
+    } else {
+        ASSERT (dst.spec().format == TypeDesc::TypeFloat);
+        OIIO_DISPATCH_TYPES (ok, "resize_block", resize_block_, srcspec.format,
+                             dst, src, roi, envlatlmode);
     }
-
-    ASSERT (dst.spec().format == TypeDesc::TypeFloat);
-    OIIO_DISPATCH_TYPES ("resize_block", resize_block_, srcspec.format,
-                         dst, src, roi, envlatlmode);
+    return ok;
 }
 
 
@@ -385,7 +389,7 @@ check_nan_block (const ImageBuf &src, ROI roi, int &found_nonfinite)
 {
     int x0 = roi.xbegin, x1 = roi.xend, y0 = roi.ybegin, y1 = roi.yend;
     const ImageSpec &spec (src.spec());
-    float *pel = (float *) alloca (spec.pixel_bytes());
+    float *pel = ALLOCA (float, spec.nchannels);
     for (int y = y0;  y < y1;  ++y) {
         for (int x = x0;  x < x1;  ++x) {
             src.getpixel (x, y, pel);
@@ -929,7 +933,7 @@ make_texture_impl (ImageBufAlgo::MakeTextureMode mode,
             newspec.full_width  = newspec.width;
             newspec.full_height = newspec.height;
             newspec.full_depth  = newspec.depth;
-            std::string name = src->name() + ".constant_color";
+            std::string name = std::string(src->name()) + ".constant_color";
             src->reset(name, newspec);
             ImageBufAlgo::fill (*src, &constantColor[0]);
             if (verbose) {
@@ -1114,7 +1118,7 @@ make_texture_impl (ImageBufAlgo::MakeTextureMode mode,
         dstspec.attribute ("textureformat", "LatLong Environment");
         configspec.attribute ("wrapmodes", "periodic,clamp");
         if (prman_metadata)
-            dstspec.attribute ("PixarTextureFormat", "Latlong Environment");
+            dstspec.attribute ("PixarTextureFormat", "LatLong Environment");
     } else {
         dstspec.attribute ("textureformat", "Plain Texture");
         if (prman_metadata)
@@ -1125,6 +1129,28 @@ make_texture_impl (ImageBufAlgo::MakeTextureMode mode,
     // smaller than the tile size?  And when we do, should we also try
     // to make it bigger in the other direction to make the total tile
     // size more constant?
+
+    // Fix nans/infs (if requested)
+    std::string fixnan = configspec.get_string_attribute("maketx:fixnan");
+    ImageBufAlgo::NonFiniteFixMode fixmode = ImageBufAlgo::NONFINITE_NONE;
+    if (fixnan.empty() || fixnan == "none") { }
+    else if (fixnan == "black") { fixmode = ImageBufAlgo::NONFINITE_BLACK; }
+    else if (fixnan == "box3") { fixmode = ImageBufAlgo::NONFINITE_BOX3; }
+    else {
+        outstream << "maketx ERROR: Unknown --fixnan mode " << " fixnan\n";
+        return false;
+    }
+    int pixelsFixed = 0;
+    if (fixmode != ImageBufAlgo::NONFINITE_NONE &&
+        (srcspec.format.basetype == TypeDesc::FLOAT ||
+         srcspec.format.basetype == TypeDesc::HALF ||
+         srcspec.format.basetype == TypeDesc::DOUBLE) &&
+        ! ImageBufAlgo::fixNonFinite (*src, fixmode, &pixelsFixed)) {
+        outstream << "maketx ERROR: Error fixing nans/infs.\n";
+        return false;
+    }
+    if (verbose && pixelsFixed)
+        outstream << "  Warning: " << pixelsFixed << " nan/inf pixels fixed.\n";
 
     // If --checknan was used and it's a floating point image, check for
     // nonfinite (NaN or Inf) values and abort if they are found.
@@ -1142,29 +1168,6 @@ make_texture_impl (ImageBufAlgo::MakeTextureMode mode,
             return false;
         }
     }
-    
-    // Fix nans/infs (if requested)
-    std::string fixnan = configspec.get_string_attribute("maketx:fixnan");
-    ImageBufAlgo::NonFiniteFixMode fixmode = ImageBufAlgo::NONFINITE_NONE;
-    if (fixnan.empty() || fixnan == "none") { }
-    else if (fixnan == "black") { fixmode = ImageBufAlgo::NONFINITE_BLACK; }
-    else if (fixnan == "box3") { fixmode = ImageBufAlgo::NONFINITE_BOX3; }
-    else {
-        outstream << "maketx ERROR: Unknown --fixnan mode " << " fixnan\n";
-        return false;
-    }
-    int pixelsFixed = 0;
-    if (! ImageBufAlgo::fixNonFinite (*src, fixmode, &pixelsFixed)) {
-        outstream << "maketx ERROR: Error fixing nans/infs.\n";
-        return false;
-    }
-    if (verbose && pixelsFixed)
-        outstream << "  Warning: " << pixelsFixed << " nan/inf pixels fixed.\n";
-    // FIXME -- we'd like to not call fixNonFinite if fixnan mode is
-    // "none", or if we did the checknan and found no NaNs.  But deep
-    // inside fixNonFinite, it forces a full read into local mem of any
-    // cached images, and that affects performance. Come back to this
-    // and solve later.
 
     double misc_time_2 = alltime.lap();
     STATUS ("misc2", misc_time_2);
@@ -1425,8 +1428,8 @@ make_texture_impl (ImageBufAlgo::MakeTextureMode mode,
 
 bool
 ImageBufAlgo::make_texture (ImageBufAlgo::MakeTextureMode mode,
-                            const std::string &filename,
-                            const std::string &outputfilename,
+                            string_view filename,
+                            string_view outputfilename,
                             const ImageSpec &configspec,
                             std::ostream *outstream)
 {
@@ -1439,7 +1442,7 @@ ImageBufAlgo::make_texture (ImageBufAlgo::MakeTextureMode mode,
 bool
 ImageBufAlgo::make_texture (ImageBufAlgo::MakeTextureMode mode,
                             const std::vector<std::string> &filenames,
-                            const std::string &outputfilename,
+                            string_view outputfilename,
                             const ImageSpec &configspec,
                             std::ostream *outstream_ptr)
 {
@@ -1452,7 +1455,7 @@ ImageBufAlgo::make_texture (ImageBufAlgo::MakeTextureMode mode,
 bool
 ImageBufAlgo::make_texture (ImageBufAlgo::MakeTextureMode mode,
                             const ImageBuf &input,
-                            const std::string &outputfilename,
+                            string_view outputfilename,
                             const ImageSpec &configspec,
                             std::ostream *outstream)
 {

@@ -32,10 +32,10 @@
 #include "libdpx/DPXColorConverter.h"
 #include <OpenEXR/ImfTimeCode.h> //For TimeCode support
 
-#include "typedesc.h"
-#include "imageio.h"
-#include "fmath.h"
-#include "strutil.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/fmath.h"
+#include "OpenImageIO/strutil.h"
 #include <iomanip>
 
 OIIO_PLUGIN_NAMESPACE_BEGIN
@@ -191,8 +191,12 @@ DPXInput::seek_subimage (int subimage, int miplevel, ImageSpec &newspec)
     m_spec = ImageSpec (m_dpx.header.Width(), m_dpx.header.Height(),
         m_dpx.header.ImageElementComponentCount(subimage), typedesc);
 
-    m_spec.x = m_dpx.header.xOffset;
-    m_spec.y = m_dpx.header.yOffset;
+    // xOffset/yOffset are defined as unsigned 32-bit integers, but m_spec.x/y are signed
+    // avoid casts that would result in negative values
+    if (m_dpx.header.xOffset <= (unsigned int)std::numeric_limits<int>::max())
+        m_spec.x = m_dpx.header.xOffset;
+    if (m_dpx.header.yOffset <= (unsigned int)std::numeric_limits<int>::max())
+        m_spec.y = m_dpx.header.yOffset;
     if ((int)m_dpx.header.xOriginalSize > 0)
         m_spec.full_width = m_dpx.header.xOriginalSize;
     if ((int)m_dpx.header.yOriginalSize > 0)
@@ -375,10 +379,11 @@ DPXInput::seek_subimage (int subimage, int miplevel, ImageSpec &newspec)
         m_spec.attribute ("compression", "rle");
     char buf[32 + 1];
     m_dpx.header.Description (subimage, buf);
-    if (buf[0] && buf[0] != -1)
+    if (buf[0] && buf[0] != char(-1))
         m_spec.attribute ("ImageDescription", buf);
-    m_spec.attribute ("PixelAspectRatio", m_dpx.header.AspectRatio(0)
-         / (float)m_dpx.header.AspectRatio(1));
+    m_spec.attribute ("PixelAspectRatio",
+        m_dpx.header.AspectRatio(1) ? (m_dpx.header.AspectRatio(0) /
+                (float)m_dpx.header.AspectRatio(1)) : 1.0f);
 
     // DPX-specific metadata
     m_spec.attribute ("dpx:ImageDescriptor",
@@ -403,7 +408,7 @@ DPXInput::seek_subimage (int subimage, int miplevel, ImageSpec &newspec)
                                         DPX_SET_ATTRIB(x, )
     // see comment above Copyright, Software and DocumentName
 #define DPX_SET_ATTRIB_STR(X, x)    if (m_dpx.header.x[0]                     \
-                                        && m_dpx.header.x[0] != -1)           \
+                                        && m_dpx.header.x[0] != char(-1))     \
                                         m_spec.attribute ("dpx:" #X,          \
                                             m_dpx.header.x)
 

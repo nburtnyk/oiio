@@ -1,5 +1,544 @@
 Changes:
 
+Release 1.5 (development in progress) -- compared to 1.4.x
+----------------------------------------------
+Major new features and improvements:
+* New oiiotool functionality/commands:
+   * --rotate90, --rotate180, --rotate270 rotate the image in 90 degree
+     axially-aligned increments. (1.5.2)
+   * --reorient will perform whatever series of rotations or flips are
+     necessary to move the pixels to match the Orientation metadata that
+     describes the desired display orientation. (1.5.2)
+   * --autoorient will automatically do the equivalent of --reorient on
+     every image as it is read in, if it has a nonstandard orientation.
+     (This is generally a good idea to use if you are using oiiotool to
+     combine images that may have different orientations.) (1.5.2)
+   * --rotate rotates an image by arbitrary angle and center point.
+     #932 (1.5.3)
+   * --warp transforms an image using a 3x3 matrix. #932 (1.5.3)
+   * --median performs a median filter. (1.5.4)
+* New ImageBufAlgo functions:
+   * rotate90(), rotate180(), rotate270() rotate the image in 90 degree
+     axially-aligned increments. (1.5.2)
+   * reorient() will perform whatever series of rotations or flips are
+     necessary to move the pixels to match the Orientation metadata that
+     describes the desired display orientation. (1.5.2)
+   * rotate() performs rotation with arbitrary angle and center point.
+     #932 (1.5.3)
+   * warp() transforms an image by a 3x3 matrix. #932 (1.5.3)
+   * median_filter performs a median filter. (1.5.4)
+* Significant internal speedups by utilizing SIMD instructions (SSE) in
+  the TextureSystem (1.5.5 / #948). To use this to its fullest extent,
+  build OIIO with the make/cmake option USE_SIMD=arch, where arch is
+  sse2, sse3, sse4.1, sse4.2, depending on what machines you'll be
+  deploying to. (Note that x86_64 automatically implies at least sse2.)
+  (1.5.5)
+
+Public API changes:
+* TextureSystem API calls have been modified: the nchannels, dresultds,
+  dresultdt fields have been removed from TextureOpt and are now passed
+  explicitly as arguments to texture(), environment(), and texture3d().
+  Some long-deprecated methods of TextureSystem have been removed, and
+  also some new API calls have been added that provide multi-point
+  texturing given a TextureHandle/PerThread rather than a ustring
+  filename.  (1.5.5) (#948)
+* New filters available to direct users of filter.{h,cpp} and for
+  ImageBufAlgo, oiiotoo, and maketx: "cubic", "keys", "simon", "rifman".
+  (1.5.0/1.4.9) (#874)
+* Global attribute "read_chunk" can set the default number of scanlines
+  read at a time internally by read_image() calls. #925
+* The Python ImageBuf class did not expose an equivalent to the C++
+  ImageBuf::get_pixels. This is exposed now. #931 (1.5.3)
+* The Filter API now uses string_view. (1.5.3)
+* ImageBuf and ImageBufAlgo now use string_view extensively. (1.5.4)
+
+Fixes, minor enhancements, and performance improvements:
+* ImageBufAlgo:
+   * flip(), flop(), flipflop() have been rewritten to work more
+     sensibly for cropped images. In particular, the transformation now
+     happens with respect to the display (full) window, rather than
+     simply flipping or flopping within the data window. (1.5.2)
+* oiiotool:
+   * oiiotool --nosoftwareattrib suppresses the altering of Software and
+     ImageHistory fields upon output. (1.5.1)
+   * oiiotool --ch now will search for channel names case-insensitively,
+     if the channel names are not first found with case-sensitive
+     compares. #897 (1.5.1/1.4.11)
+   * oiiotool --wildcardoff/--wildcardon can selectively disable and
+     re-enable the frame sequence numeric wildcards (useful if you have
+     a filename or other argument that must actually contain '#' or '@'
+     characters). #892 (1.5.1/1.4.11)
+   * oiiotool --no-autopremult/--autopremult can disable and re-enable
+     the automatic premultiplication of color by opacity, in files where
+     they are stored not-premultiplied and you wish to preserve the
+     original un-premultiplied values. #906 (1.5.1/1.4.11)
+   * oiiotool --sansattrib omits "-attrib" and "-sattrib" and their
+     arguments from the command line that is put in the Software and
+     ImageHistory metadata (makes it less pointlessly verbose). (1.5.1)
+   * Now get helpful error messages if input images are corrupt or
+     incomplete. (1.5.1)
+   * oiiotool --flip, --flop, --flipflop, and --transpose now have more
+     sensible behavior for cropped images. (1.5.2)
+   * oiiotool --orientcw, --orientccw, and --orient180 are the new names
+     for --rotcw, --rotccw, --rot180. The old names were confusing, and now
+     it is more clear that these merely adust the Orientation metadata that
+     suggests viewing orientation, rather than actually rotating the image
+     data. (1.5.2)
+   * oiiotool color conversion ops crashed when inputs were files with
+     MIPmap levels (such as textures). #930 (1.5.3/1.4.13)
+   * More graceful handling when outputting an image with negative pixel
+     window origin to a file format that doesn't support this feature.
+     (1.5.3)
+   * oiiotool --unsharp_mask:kernel=median will perform a median filter
+     for the blurring step (rather than a gaussian or other convolution
+     filter), which tends to sharpen small details but not over-sharpen
+     long edges as the traditional unsharp mask often does. (1.5.4)
+* maketx:
+   * Fix case typo for LatLong env map creation when in 'prman' mode. #877.
+     (1.5.1/1.4.10)
+   * maketx --attrib, --sattrib, and --sansattrib now work like
+     oiiotool; in other words, you can use command line arguments to add
+     or alter metadata in the process of creating a texture. #901 (1.5.1)
+* OpenEXR:
+   * Improve the quality of lossy b44 compression by more correctly
+     using the pLinear value of channels (we were incorrectly using the
+     flag to indicate linear channels, but it's really for channels
+     that are perceptually linear). (#867) (1.5.0/1.4.9)
+   * Fix potential build breaks due to incorrect use of
+     Imf::isDeepData() which apparently was not intended to be an
+     externally-visible function. (1.5.0/1.4.9) (#875)
+   * Fix crashes/exceptions when passing string array attributes
+     for OpenEXR output. #907 (1.5.1/1.4.11)
+   * Improved ordering of channel names for OpenEXR files with many
+     "layers".  #904 (1.5.1/1.4.11)
+   * Fixed issue where a stringvec of 16 items was mishandled as a
+     matrix. #929 (1.5.3/1.4.13)
+   * OpenEXR 2.2 support, including the new DWAA/DWAB compression modes.
+     (1.5.4)
+* JPEG:
+   * Fix broken recognition of .jfi extension. (#876)
+   * Read and write ICC profiles as attribute "ICCProfile". (#911)
+   * Fix seek_subimage for JPEG input -- did not properly return the
+    spec. (1.5.2/1.4.12)
+* PNG:
+   * Read and write ICC profiles as attribute "ICCProfile". (#911)
+* TIFF:
+   * Read and write ICC profiles as attribute "ICCProfile". (#911)
+   * Graceful handling of output of images with negative data window
+     origin. (1.5.3)
+* RAW: Fix for portrait-orientation image reads. (#878) (1.5.1/1.4.10)
+* RLA: Fix bug that caused RLA output to not respect requests for 10 bit
+  output (would force it to 16 in that case). #899 (1.5.1)
+* ImageSpec::get_float_attribute() is now better about retrieving values
+  that were stored as integers, even though you are querying them as
+  floats. (#862) (1.5.0/1.4.9)
+* ImageCache fix for when files are not found, then subsequently the
+  searchpath is changed. #913 (1.4.12/1.5.2)
+* Fixed some alloca calls that did not get the right amount of memory.
+  (#866) (1.5.0/1.4.9)
+* Fix an off-by-one loop in IBA::resize that would not get the wrong
+  image result, but might trigger debuggers to flag it as touching the
+  wrong memory. (#868) (1.5.0/1.4.9)
+* Better exception safety in Filesystem::scan_for_matching_filenames().
+  #902 (1.5.1/1.4.11)
+* Python: ImageBuf.get_pixels() is now implemented, was previously omitted.
+  (1.5.2)
+
+Build/test system improvements:
+* Fix several compiler warnings and build breakages for a variety of
+  platforms and compiler versions. (#858, #861) (1.5.0/1.4.8)
+* Move around some cpack-related components. (#863) (1.5.0/1.4.9)
+* Allow in-source build (not recommended, but necessary for Macports).
+  (#863) (1.5.0/1.4.9)
+* Fixes to docs-building makefiles. (#873) (1.5.0/1.4.9)
+* More robust build when OpenEXR and IlmBase have installed their
+  respective header files in different directories rather than the
+  expected behavior of being installed together. (#861) (1.5.0/1.4.9)
+* Fix build break in DEBUG compiles for ustring internals. (#869) (1.5.0/1.4.9)
+* Fix warnings about potentially uninitialized variables. (#871) (1.5.0/1.4.9)
+* Make thread.h use more modern gcc intrinsics when gcc >= 4.8, this
+  allows correct thread.h operations for PPC and MIPS platforms that
+  were't working before. (#865) (1.5.0/1.4.9)
+* Fix Windows build when OIIO_STATIC_BUILD is used. (#872) (1.5.0/1.4.9)
+* Fixes to get a clean compile on Windows + MSVC 9. (#859) (1.5.0/1.4.8)
+* Fixes to get a clean compile on Windows + MSVC 9. (#872) (1.5.0/1.4.9)
+* Make 3.0 compatibility fixes on OSX. (1.5.1/1.4.10)
+* Fix segfaults on 32 bit systems with gcc 4.2. #889 (1.5.1/1.4.11)
+* Fixes to Filesystem internals to work with older Boost releases older
+  than 1.45. #891 (1.5.1/1.4.11)
+* Fixes to find libraw properly with Visual Studio 2010. #895 (1.5.1/1.4.11)
+* Fix bad casts in thread.h that broke some platforms. #896 (1.5.1/1.4.11)
+* Several fixes for Windows build, including properly finding OpenEXR
+  libraries when OpenEXR 2.1 is used. (1.5.1/1.4.11)
+* Fixes to fmath.h to work with MSVC 2013 (some long-omitted math ops that
+  we'd always needed to define for Windows only are finally supported
+  in MSVC 2013). #912 (1.4.12/1.5.2) #927 (1.4.13/1.5.3)
+* Fix for Linux + Boost >= 1.55 combination: need to link with -lrt.
+  #914 (1.4.12/1.5.2)
+* Fix Ptex + static linkage. (1.4.12/1.5.2)
+* Rudimentary support for C++11: building with USE_CPP11=1 tries to set
+  compiler flags (for gcc and clang, anyway) to use C++11 mode, and also
+  building with USE_LIBCPLUSPLUS=1 tries to link with libc++ if you are
+  using clang. (1.5.2)
+* Fixes for Boost Filesystem 1.46-1.49. (1.5.2/1.4.12)
+* testtex new options: --nchannels (forces num channels to look up, rather
+  than always doing what's in the file), --derivs (force the kind of texture
+  calls that return derivs of the texture lookups. (1.5.4)
+
+Developer goodies / internals:
+* New Strutil string comparison functions: starts_with, ends_with.
+  (1.5.1/1.4.10)
+* New Strutil simple parsing functions: skip_whitespace, parse_char,
+  parse_until_char, parse_prefix, parse_int, parse_float, parse_string,
+  parse_word, parse_identifier, parse_until. (1.5.1/1.4.10, 1.5.2/1.4.11)
+* New Filesystem functions: create_directory, copy, remove, remove_all,
+  temp_directory_path, unique_path. (1.5.1/1.4.10)
+* thread.h: add atomic_exchange() function. #898 (1.5.1/1.4.11)
+* Improved error propagation through ImageCache, ImageBuf, and oiiotool.
+  (1.5.1)
+* Moved certain platform-dependent macros from sysutil.h to platform.h
+  (1.5.4)
+* ustring: add comparisons between ustrings versus char* and string_view.
+  (1.5.4)
+* New simd.h exposes float4, int4, and mask4 classes that utilize SSE
+  instructions for big speedups. (1.5.5 / #948)
+
+
+
+
+Release 1.4.12 (31 Jul 2014 -- compared to 1.4.11)
+--------------------------------------------------
+* ImageCache fix for when files are not found, then subsequently the
+  searchpath is changed. #913 (1.4.12/1.5.2)
+* Fixes to fmath.h to work with MSVC 2013 (some long-omitted math ops that
+  we'd always needed to define for Windows only are finally supported
+  in MSVC 2013). #912 (1.4.12/1.5.2)
+* Fix for Linux + Boost >= 1.55 combination: need to link with -lrt.
+  #914 (1.4.12/1.5.2)
+* Fix Ptex + static linkage. (1.4.12/1.5.2)
+
+
+Release 1.4.11 (9 Jul 2014 -- compared to 1.4.10)
+-------------------------------------------------
+* OpenEXR output fix for crashes/exceptions when passing string array
+  attributes. #907
+* Improved ordering of channel names for OpenEXR files with many "layers".
+  #904
+* oiiotool --ch now will search for channel names case-insensitively,
+  if the channel names are not first found with case-sensitive compares. #897
+* oiiotool --wildcardoff/--wildcardon can selectively disable and re-enable
+  the frame sequence numeric wildcards (useful if you have a filename or
+  other argument that must actually contain '#' or '@' characters). #892
+* oiiotool --no-autopremult/--autopremult can disable and re-enable
+  the automatic premultiplication of color by opacity, in files where
+  they are stored not-premultiplied and you wish to preserve the original
+  un-premultiplied values. #906
+* Fix segfaults on 32 bit systems with gcc 4.2. #889
+* Fixes to Filesystem internals to work with older Boost releases < 1.45. #891
+* Fixes to find libraw properly with Visual Studio 2010. #895
+* Fix bad casts in thread.h that broke some platforms. #896
+* Strutil: add another variety of parse_identifier with an expanded
+  character set.
+* thread.h: add atomic_exchange() function. #898
+* Several fixes for Windows build, including properly finding OpenEXR
+  libraries when OpenEXR 2.1 is used.
+* Better exception safety in Filesystem::scan_for_matching_filenames(). #902
+
+Release 1.4.10 (20 Jun 2014 -- compared to 1.4.9)
+-------------------------------------------------
+* Fix for portrait-orientation RAW image reads. (#878)
+* maketx: Fix case typo for LatLong env map creation when in 'prman'
+  mode (#877).
+* New Strutil string comparison functions: starts_with, ends_with.
+* Make 3.0 compatibility fixes on OSX.
+* New Strutil simple parsing functions: skip_whitespace, parse_char,
+  parse_until_char, parse_prefix, parse_int, parse_float, parse_string,
+  parse_word, parse_identifier, parse_until.
+* New Filesystem functions: create_directory, copy, remove, remove_all,
+  temp_directory_path, unique_path.
+
+Release 1.4.9 (6 Jun 2014 -- compared to 1.4.8)
+-----------------------------------------------
+* Allow in-source build (not recommended, but necessary for MacPorts). (#863)
+* CPack improvements. (#863)
+* Fixes to docs-building makefiles. (#873)
+* Make ImageSpec::get_float_attribute correctly convert many integer types.
+  (#862)
+* Fixed some alloca calls that did not get the right amount of memory. (#866)
+* OpenEXR: Improve the quality of lossy b44 compression by more correctly
+  using the pLinear value of channels (we were incorrectly using the flag
+  to indicate linear channels, but it's really for channels that are
+  perceptually linear). (#867)
+* More robust build when OpenEXR and IlmBase have installed their
+  respective header files in different directories rather than the
+  expected behavior of being installed together. (#861)
+* Fix an off-by-one loop in IBA::resize that would not get the wrong
+  image result, but might trigger debuggers to flag it as touching the
+  wrong memory. (#868)
+* Fix build break in DEBUG compiles for ustring internals. (#869)
+* Fix warnings about potentially uninitialized variables. (#871)
+* Make thread.h use more modern gcc intrinsics when gcc >= 4.8, this
+  allows correct thread.h operations for PPC and MIPS platforms that
+  were't working before. (#865)
+* Fix Windows build when OIIO_STATIC_BUILD is used. (#872)
+* Fixes to get a clean compile on Windows + MSVC 9. (#872)
+* New filters available to direct users of filter.{h,cpp} and for
+  ImageBufAlgo, oiiotoo, and maketx: "cubic", "keys", "simon", "rifman". (#874)
+* OpenEXR: Fix potential build breaks due to incorrect use of
+  Imf::isDeepData() which apparently was not intended to be an
+  externally-visible function. (#875)
+* JPEG: Fix broken recognition of .jfi extension. (#876)
+
+Release 1.4.8 (23 May 2014 -- compared to 1.4.7)
+------------------------------------------------
+* Fix several compiler warnings and build breakages for a variety of
+  platforms and compiler versions. No new feature or true bug fixes.
+  #857, #858, #859
+
+
+Release 1.4 (19 May 2014) -- compared to 1.3.x
+----------------------------------------------
+Major new features and improvements:
+* The PNM reader now supports "PFM" files, which are the floating point
+  extension to PNM. (1.4.1)
+* Preliminary support for reading a wide variety of digital camera "RAW"
+  files.  (1.4.1)
+* New oiiotool commands:
+    --cpow : raise pixel values to a power (1.4.1)
+    --label : give a name to the top-of-stack image, can be referred
+              to later in the command line (1.4.1)
+    --cut : combine --crop, --origin +0+0, and --fullpixels. (1.4.3)
+    --pdiff : perceptual diff (#815) (1.4.4)
+    --polar, --unpolar : complex <-> polar conversion. (#831) (1.4.5)
+* oiiotool --resize and --fit, and also maketx when using "good" filters
+  for downsizing, have been significantly sped up. When downsizing
+  with large filters, we have seen up to 3x improvement. (#808) (1.4.3)
+
+Public API changes:
+* New ImageBufAlgo functions:
+  - pow() raises pixel values to a power. (1.4.1)
+  - cut() cuts a region of pixels and moves it to the origin (combines
+    crop, reset origin, and set full res = data resolution). (1.4.3)
+  - complex_to_polar() and polar_to_complex() convert from (real,imag)
+    to (amplitude,phase) and back. (#831) (1.4.5)
+* New string_view class (in string_view.h) describes a non-owning
+  reference to a string.  The string_view is now used in many places
+  throughout OIIO's APIs that used to pass parameters or return values
+  as char* or std::string&.  Read string_view.h for an explanation of why
+  this is good. (1.4.2, 1.4.3) (N.B. this was called string_ref until 1.4.6,
+  when it was renamed string_view to conform to C++17 draft nomenclature.)
+* New array_view<>, array_view_strided<>, strided_ptr<>, and image_view<>
+  templates are great utility for passing bounded and strided arrays. (1.4.3)
+* Removed deprecated PT_* definitions from typedesc.h.
+* Removed the quantization-related fields from ImageSpec. (1.4.3)
+* Dither: If ImageOutput::open() is passed an ImageSpec containing the
+  attribute "oiio:dither" and it is nonzero, then any write_*() calls
+  that convert a floating point buffer to UINT8 output in the file will
+  have a hashed dither added to the pixel values prior to quantization
+  in order to prevent the appearance of visible banding. The specific
+  nonzero value passed for the attribute will serve as a hash seed so
+  that the pattern is repeatable (or not). (1.4.3)
+
+Fixes, minor enhancements, and performance improvements:
+* Improved oiiotool features:
+  * --stats on deep files now prints additional info, such as the minimum
+    and maximum depth and on which pixels they were encountered, as well
+    as which pixel had the maximum number of depth samples. (1.4.1)
+  * --resize and --resample allow WIDTHx0 or 0xHEIGHT, where the '0'
+    value will be interpreted as automatically computing the missing 
+    dimension to preserve the aspect ratio of the source image.
+    (#797, #807) (1.4.3)
+  * Fixed possible crash when using --origin with tiled, cached
+    images. (1.3.12/1.4.2)
+  * --pdiff does a perceptual diff (like 'idiff -p'). (#815) (1.4.4)
+  * --dumpdata takes a noptional modifier empty=0 that will cause empty
+    deep pixels to not produce any output. (#821) (1.4.5)
+  * --polar, --unpolar convert from complex (real,imag) to polar
+    (amplitude, phase) and vice versa. (#831) (1.4.5)
+  * View wildcards: similar to frame range wildcards, "%V" is replaced by
+    new names, "%v" by the first letter of each view. The view list is
+    {"left","right"} by default, but may be set with the --views argument.
+    (1.4.5)
+  * --over and --zover set the resulting display/full window to the union
+    of those of the inputs; previously it set the display window to that
+    of the foreground image, which is often a poor default. (1.4.7)
+* ImageCache/TextureSystem:
+  - The multi-point version of environment() was broken. (1.3.9/1.4.1)
+  - Don't honor the SHA-1 fingerprint found in a file if the "Software"
+    metadata doesn't indicate that the file was written by maketx or
+    oiiotool. (1.4.3)
+* OpenEXR:
+  - Multi-part EXR (2.0) didn't write the required "name" attribute for
+    each part. (1.3.10/1.4.1)
+  - Fix crashing bug when reading stringvector attributes in the
+    file. (1.3.11/1.4.2)
+  - Add .sxr and .mxr as possible filename extensions (1.3.12/1.4.2)
+  - Smarter channel ordering of input of files with ZBack, RA, GA, or BA
+    channels (#822) (1.4.5).
+  - Adhere to the misunderstood limitation that OpenEXR library doesn't
+    allow random writes to scanline files. (1.4.6)
+  - More robust with certain malformed metadata. (#841) (1.4.6)
+* TIFF: Give a more explicit error message for unsupported tile sizes (1.4.4)
+* GIF: Fixes to subimage generation; GIF frames are treated as sequential
+  windows to be drawn on canvas rather than as independent images; respect
+  "disposal" method; initial canvas is now transparent and all GIFs are
+  presented as 4-channel images. (#828) (1.4.5)
+* iconvert: properly handle multi-image files for formats that can't
+  append subimages. (1.3.10/1.4.1)
+* iv info window should print native file info, not translated
+  ImageBuf/ImageCache info. (1.3.10/1.4.1)
+* Fix ImageCache::get_pixels() for the chbegin != 0 case, when cache
+  and output buffer types were not identical. (1.3.10/1.4.1)
+* DPX:
+  - Fixed several places in the where it could have had buffer
+    overruns when processing certain malformed string fields. (1.4.1)
+  - Fixed inappropriate use of "dpx_ImageDescriptor" could make invalid
+    DPX files (especially when reading metadata from one DPX file,
+    changing the number of channels, then writing out again as a DPX
+    file). (1.3.10/1.4.1)
+  - For output, honor the "Software" metadata attribute passed in.
+    (1.3.11/1.4.2)
+  - Ignore negative image origin values, which are not allowed by the
+    DPX spec which states they are unsigned. (#813) (1.4.4)
+  - Fix improper handling of unsupported pixel data types. (#818) (1.4.5)
+  - Accept pixel ratio (x/0) to mean 1.0, not NaN. (#834) (1.4.5/1.3.13)
+  - Pad subimages to 8k boundaries, as suggested by the DPX spec (1.4.7)
+  - Properly write "userdata" field to DPX files if set. (1.4.7)
+* PNG:
+  - add "png:compressionlevel" and "compression" strategy attributes.
+    (1.3.12/1.4.2)
+  - output properly responds to "oiio:UnassociatedAlpha"=1 to indicate
+    that the buffer is unassociated (not premultiplied) and therefore it
+    should not automatically unpremultiply it. (1.4.5)
+* Make ImageBuf iterators return valid black pixel data for missing
+  tiles. (1.3.12/1.4.2)
+* Make the ImageOutput implementations for all non-tiled file formats
+  emulate tiles by accepting write_tile() calls and buffering the image
+  until the close() call, at which point the scanlines will be output.
+  (1.4.3)
+* All ImageBufAlgo functions, and oiiotool, strip any "oiio:SHA-1" hash
+  values in the metadata in order not to confuse the TextureSystem. (1.4.3)
+* IFF: accept write_scanline, even though IFF is tile only. (1.4.3)
+* The implementation of the Lanczos filter (and any operations using it)
+  have been sped up by using an approximate fast_sinpi instead of the
+  more expensive sin() (1.4.3).
+* Speed up iinfo --hash / oiiotool --hash by about 20%. (#809) (1.4.4)
+* All format writer plugins: ensure that calling close() twice is safe.
+  (#810) (1.4.4)
+* oiiotool --info and iinfo output have been altered slightly to make them
+  match and be consistent. Also, oiiotool didn't say that deep files were
+  deep (1.4.4).
+* Fixed bad bugs in IBA::flatten() and oiiotool --flatten. (#819) (1.4.5)
+* Fix Parameter neglect of properly copying the m_interp field for assignment
+  and copy construction. (#829) (1.4.5/1.3.13)
+* Fix ImageBufAlgo::circular_shift (and oiiotool --cshift) that did not
+  wrap correctly for negative shifts. (#832) (1.4.5/1.3.13)
+* The "gaussian" flter incorrectly had default width 2 (correct = 3),
+  and the "mitchell" filter incorrect had default width 3 (correct = 4).
+  These were bugs/typos, the new way is correct. If you were using those
+  filters in ways that used the default width value, appearance may change
+  slightly. (1.4.6)
+
+Build/test system improvements:
+* libOpenImageIO_Util is now built that only has the utility functions
+  in libutil (in addition to the libOpenImageIO, which contains everything).
+  This is handy for apps that want to use OIIO's utility functions (such
+  as ustring or Filesystem) but doesn't really need any of the image
+  stuff.  A build flag BUILD_OIIOUTIL_ONLY=1 will cause only the util
+  library to be built.  (1.4.1)
+* New build option OIIO_THREAD_ALLOW_DCLP=0 will turn off an
+  optimization in thread.h, resulting in possibly worse spin lock
+  performance during heavy thread contention, but will no longer get
+  false positive errors from Thread Sanitizer.  The default is the old
+  way, with full optimization! (1.4.1)
+* More robust detection of OpenEXR library filenames. (1.4.1)
+* Always reference OpenEXR and Imath headers as <OpenEXR/foo.h> rather 
+  than <foo.h>. (1.4.1)
+* Unit test strutil_test now comprehensively tests Strutil. (1.4.1)
+* Fix broken build when EMBEDPLUGINS=0. (1.4.3/1.3.13)
+* Fix broken build against OpenEXR 1.x. (1.4.3/1.3.13)
+* version.h has been renamed oiioversion.h.  For back compatibility, there
+  is still a version.h, but it merely includes oiioversion.h. (#811) (1.4.4)
+* Moved all the public header files from src/include to
+  src/include/OpenImageIO, so that the src/include area more closely
+  matches the layout of an OIIO install area. (#817) (1.4.4)
+* Fix compilation problems for PowerPC (#825). (1.4.5/1.3.13)
+* Fixes for OpenBSD compilation. (#826/#830) (1.4.5/1.3.13)
+* Fixes for Linux compilation when building with BUILDSTATIC=1. (1.4.6)
+* Fixes for compilation against IlmBase/OpenEXR 2.1. (1.4.6)
+* Improve finding of Freetype on some systems (1.4.6).
+* Add to top level Makefile the option STOP_ON_WARNING=0 to let it cleanly
+  compile code that generates compiler warnings, without stopping the build.
+  (1.4.7)
+
+Developer goodies / internals:
+* TBB has been removed completely. (1.4.2)
+* Slightly faster timer queries in timer.h for OSX and Windows. (1.4.1)
+* Strutil :
+  - safe_strcpy() -- like strncpy, but copies the terminating 0 char. (1.4.1)
+  - split() fixes bug when maxsplit is not the default value. (1.3.10/1.4.1)
+* ParamValue/ParamValueList :
+  - ParamValue now allows get/set of the internal 'interp' field. (1.3.9/1.4.1)
+  - ParamValueList::push_back is not properly const-ified. (1.4.1)
+  - New PVL::find() lets you search on the PVL. (1.4.6)
+* fmath.h :
+  - New fast_sin, fast_cos, fast_sinpi, fast_cospi are much faster
+    polynomial approximations (with max absolute error of ~0.001). (1.4.3)
+  - round_to_multiple_of_pow2 - a faster version of the existing
+    round_to_multiple(), but only works when the multiple is known to be
+    a power of 2. (1.4.6)
+* TypeDesc now has operator<, which makes it easier to use STL data structures
+  and algorithms that expect an ordering, using TypeDesc as a key. (1.4.6)
+* thread.h
+  - Slight thread.h portability tweaks. (1.4.1)
+  - spin_rw_lock now has more standard lock()/unlock() as synonym for
+    for exclusive/write lock, and lock_shared()/unlock_shared() as
+    synonym for "read" locks. (1.4.6)
+* ustring :
+  - new ustringLess and ustringHashIsLess functors make it easier to use
+    ustring as keys in STL data structures and algorithms that require
+    an ordering function. (1.4.6)
+  - improve thread performance significantly by using an
+    unordered_map_concurrent internally for the ustring table. (1.4.6)
+* unordered_map_concurrent.h :
+  - Allow umc template to specify a different underlying map for the
+    bins. (1.4.6)
+  - Add retrieve() method that's slightly faster than find() when you just
+    need a value, not an iterator. (1.4.6)
+  - Align bins to cache lines for improved thread performance. (1.4.6)
+* ImageBuf iterators have a new rerange() method that resets the iteration
+  range, without changing images or constructing a new iterator. (1.4.6)
+
+
+
+Release 1.3.14 (19 May 2014 -- compared to 1.3.13)
+--------------------------------------------------
+* OpenEXR output: More robust with certain malformed metadata. (#841) (1.4.6)
+* Rename the string_ref class to string_view. (This is unused in OIIO, it
+  is for compatibility with OSL.)
+* Build fixes on Linux when using BUILDSTATIC=1.
+* Add round_to_multiple_of_pow2 to fmath.h
+* Add STOP_ON_WARNING option to the top level Makeile wrapper.
+* Add documentation on the Python binding for IBA::cut.
+* oiiotool --over and --zover now set the output image's display window to
+  the union of the inputs' display window, rather than to the foreground.
+
+Release 1.3.13 (2 Apr 2014 -- compared to 1.3.12)
+-------------------------------------------------
+* Bug fix to string_ref::c_str().
+* Make ImageBuf iterators return valid black pixel data for missing tiles.
+* Fix broken build when EMBEDPLUGINS=0.
+* Fix broken build when building against OpenEXR 1.x.
+* Fix bad bugs in IBA::flatten() and oiiotool --flatten. (#819)
+* Fix DPX handling of unsupported pixel types. (#818)
+* Fix compilation problems for PowerPC.
+* Fix Parameter neglect of proerly copying the m_interp field for assignment
+  and copy construction. (#829)
+* Fixes for OpenBSD compilation. (#826/#830)
+* DPX: accept pixel ratio (x/0) to mean 1.0, not NaN. (#834)
+* Fix ImageBufAlgo::circular_shift (and oiiotool --cshift) that did not
+  wrap correctly for negative shifts. (#832)
+
 Release 1.3.12 (25 Jan 2014 -- compared to 1.3.11)
 --------------------------------------------------
 * Add .sxr and .mxr as possible filename extensions for OpenEXR.
@@ -9,7 +548,6 @@ Release 1.3.12 (25 Jan 2014 -- compared to 1.3.11)
 * oiiotool --origin could crash with certain large ImageCache-backed
   images.
 
-
 Release 1.3.11 (8 Jan 2014 -- compared to 1.3.10)
 -------------------------------------------------
 * DPX output: honor the "Software" metadata attribute passed in.
@@ -17,8 +555,6 @@ Release 1.3.11 (8 Jan 2014 -- compared to 1.3.10)
   file.
 * Fix build breaks when building against OpenEXR 1.x.
 * Fix warnings with Boost Python + gcc 4.8.
-
-
 
 Release 1.3.10 (2 Jan 2014 -- compared to 1.3.9)
 ------------------------------------------------
@@ -166,7 +702,7 @@ Fixes, minor enhancements, and performance improvements:
     uses the metadata from the original file.
   * get_image_info/get_texture_info queries for "datawindow" and
     "displaywindow". (1.3.6)
-  * The multi-point version of environment() was broken. (1.3.9)
+  * The multi-point version of environment() was broken. (1.3.9/1.4.1)
 * maketx: --hicomp uses the new range compression/expansion formula.  (1.3.3)
 * DPX:
   * support multi-image (often used for stereo frames).
@@ -248,7 +784,7 @@ Developer goodies:
 * Sysutil::physical_memory() tries to figure out the total physical memory
   on the machine. (1.3.6)
 * Strutil::safe_strcpy (1.3.8)
-* ParamValue now allows get/set of the hidden 'interp' field. (1.3.9)
+* ParamValue now allows get/set of the hidden 'interp' field. (1.3.9/1.4.1)
 
 
 

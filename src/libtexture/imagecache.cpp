@@ -36,21 +36,22 @@
 
 #include <OpenEXR/ImathMatrix.h>
 
-#include "dassert.h"
-#include "typedesc.h"
-#include "varyingref.h"
-#include "ustring.h"
-#include "filesystem.h"
-#include "thread.h"
-#include "fmath.h"
-#include "strutil.h"
-#include "sysutil.h"
-#include "timer.h"
-#include "optparser.h"
-#include "imageio.h"
-#include "imagebuf.h"
-#include "imagecache.h"
-#include "texture.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/varyingref.h"
+#include "OpenImageIO/ustring.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/thread.h"
+#include "OpenImageIO/fmath.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/sysutil.h"
+#include "OpenImageIO/timer.h"
+#include "OpenImageIO/optparser.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/imagecache.h"
+#include "OpenImageIO/texture.h"
+#include "OpenImageIO/simd.h"
 #include "imagecache_pvt.h"
 
 #include <boost/foreach.hpp>
@@ -247,7 +248,8 @@ ImageCacheFile::ImageCacheFile (ImageCacheImpl &imagecache,
       m_total_imagesize(0),
       m_inputcreator(creator)
 {
-    m_filename = imagecache.resolve_filename (m_filename.string());
+    m_filename_original = m_filename;
+    m_filename = imagecache.resolve_filename (m_filename_original.string());
     // N.B. the file is not opened, the ImageInput is NULL.  This is
     // reflected by the fact that m_validspec is false.
     m_Mlocal.makeIdentity();
@@ -506,7 +508,7 @@ ImageCacheFile::init_from_spec ()
     if ((p = spec.find_attribute ("textureformat", TypeDesc::STRING))) {
         const char *textureformat = *(const char **)p->data();
         for (int i = 0;  i < TexFormatLast;  ++i)
-            if (! strcmp (textureformat, texture_format_name((TexFormat)i))) {
+            if (Strutil::iequals (textureformat, texture_format_name((TexFormat)i))) {
                 m_texformat = (TexFormat) i;
                 break;
             }
@@ -583,6 +585,14 @@ ImageCacheFile::init_from_spec ()
         size_t found = desc.rfind (prefix);
         if (found != std::string::npos)
             m_fingerprint = ustring (desc, found+strlen(prefix), 40);
+    }
+    if (m_fingerprint) {
+        // If it looks like something other than OIIO wrote the file, forget
+        // the fingerprint, it probably is not accurate.
+        string_view software = spec.get_string_attribute ("Software");
+        if (! Strutil::istarts_with (software, "OpenImageIO") &&
+            ! Strutil::istarts_with (software, "maketx"))
+            m_fingerprint.clear ();
     }
 
     m_mod_time = Filesystem::last_write_time (m_filename.string());
@@ -930,6 +940,8 @@ ImageCacheFile::invalidate ()
     m_fingerprint.clear ();
     duplicate (NULL);
 
+    m_filename = m_imagecache.resolve_filename (m_filename_original.string());
+
     // Eat any errors that occurred in the open/close
     while (! imagecache().geterror().empty())
         ;
@@ -1214,6 +1226,21 @@ ImageCacheTile::ImageCacheTile (const TileID &id, const void *pels,
 ImageCacheTile::~ImageCacheTile ()
 {
     m_id.file().imagecache().decr_tiles (memsize ());
+}
+
+
+
+size_t
+ImageCacheTile::memsize_needed () const
+{
+    const ImageSpec &spec (file().spec(m_id.subimage(),m_id.miplevel()));
+    TypeDesc datatype = file().datatype(id().subimage());
+    size_t pixelsize = spec.nchannels * datatype.size();
+    size_t s = spec.tile_pixels() * pixelsize;
+    // N.B. Round up so we can use a SIMD fetch for the last pixel and
+    // channel without running off the end.
+    s += OIIO_SIMD_MAX_SIZE_BYTES;
+    return s;
 }
 
 
@@ -1625,7 +1652,7 @@ ImageCacheImpl::reset_stats ()
 
 
 bool
-ImageCacheImpl::attribute (const std::string &name, TypeDesc type,
+ImageCacheImpl::attribute (string_view name, TypeDesc type,
                            const void *val)
 {
     bool do_invalidate = false;
@@ -1764,7 +1791,7 @@ ImageCacheImpl::attribute (const std::string &name, TypeDesc type,
 
 
 bool
-ImageCacheImpl::getattribute (const std::string &name, TypeDesc type,
+ImageCacheImpl::getattribute (string_view name, TypeDesc type,
                               void *val)
 {
 #define ATTR_DECODE(_name,_ctype,_src)                                  \

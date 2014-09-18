@@ -36,13 +36,13 @@
 
 #include <boost/scoped_array.hpp>
 
-#include "dassert.h"
-#include "typedesc.h"
-#include "strutil.h"
-#include "fmath.h"
-#include "thread.h"
-
-#include "imageio.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/fmath.h"
+#include "OpenImageIO/thread.h"
+#include "OpenImageIO/hash.h"
+#include "OpenImageIO/imageio.h"
 #include "imageio_pvt.h"
 
 #include <OpenEXR/ImfThreading.h>
@@ -53,19 +53,12 @@ OIIO_NAMESPACE_ENTER
 // Global private data
 namespace pvt {
 recursive_mutex imageio_mutex;
-atomic_int oiio_threads;
+atomic_int oiio_threads (boost::thread::hardware_concurrency());
+atomic_int oiio_read_chunk (256);
 ustring plugin_searchpath;
 std::string format_list;   // comma-separated list of all formats
 std::string extension_list;   // list of all extensions for all formats
-
-// Trick to initialize the atomic_int -- TBB doesn't allow direct ctr
-struct atomic_int_initializer {
-    atomic_int_initializer(atomic_int &a, int value) { a = value; }
-};
-atomic_int_initializer oiio_threads_init(oiio_threads,
-                                         int(boost::thread::hardware_concurrency()));
-
-};
+}
 
 
 
@@ -138,7 +131,7 @@ static const int maxthreads = 64;   // reasonable maximum for sanity check
 
 
 bool
-attribute (const std::string &name, TypeDesc type, const void *val)
+attribute (string_view name, TypeDesc type, const void *val)
 {
     if (name == "threads" && type == TypeDesc::TypeInt) {
         int ot = Imath::clamp (*(const int *)val, 0, maxthreads);
@@ -148,6 +141,10 @@ attribute (const std::string &name, TypeDesc type, const void *val)
         return true;
     }
     spin_lock lock (attrib_mutex);
+    if (name == "read_chunk" && type == TypeDesc::TypeInt) {
+        oiio_read_chunk = *(const int *)val;
+        return true;
+    }
     if (name == "plugin_searchpath" && type == TypeDesc::TypeString) {
         plugin_searchpath = ustring (*(const char **)val);
         return true;
@@ -158,13 +155,17 @@ attribute (const std::string &name, TypeDesc type, const void *val)
 
 
 bool
-getattribute (const std::string &name, TypeDesc type, void *val)
+getattribute (string_view name, TypeDesc type, void *val)
 {
     if (name == "threads" && type == TypeDesc::TypeInt) {
         *(int *)val = oiio_threads;
         return true;
     }
     spin_lock lock (attrib_mutex);
+    if (name == "read_chunk" && type == TypeDesc::TypeInt) {
+        *(int *)val = oiio_read_chunk;
+        return true;
+    }
     if (name == "plugin_searchpath" && type == TypeDesc::TypeString) {
         *(ustring *)val = plugin_searchpath;
         return true;
@@ -186,10 +187,9 @@ getattribute (const std::string &name, TypeDesc type, void *val)
 
 
 inline int
-quantize (float value, float quant_black, float quant_white,
-          int quant_min, int quant_max)
+quantize (float value, int quant_min, int quant_max)
 {
-    value = Imath::lerp ((float)quant_black, (float)quant_white, value);
+    value = value * quant_max;
     return Imath::clamp ((int)(value + 0.5f), quant_min, quant_max);
 }
 
@@ -333,20 +333,17 @@ pvt::convert_to_float (const void *src, float *dst, int nvals,
 template<typename T>
 const void *
 _from_float (const float *src, T *dst, size_t nvals,
-            float quant_black, float quant_white, int quant_min, int quant_max)
+             int quant_min, int quant_max)
 {
     if (! src) {
         // If no source pixels, assume zeroes
-        memset (dst, 0, nvals * sizeof(T));
-        T z = (T) quantize (0, quant_black, quant_white,
-                            quant_min, quant_max);
+        T z = T(0);
         for (size_t p = 0;  p < nvals;  ++p)
             dst[p] = z;
     } else if (std::numeric_limits <T>::is_integer) {
         // Convert float to non-float native format, with quantization
         for (size_t p = 0;  p < nvals;  ++p)
-            dst[p] = (T) quantize (src[p], quant_black, quant_white,
-                                   quant_min, quant_max);
+            dst[p] = (T) quantize (src[p], quant_min, quant_max);
     } else {
         // It's a floating-point type of some kind -- we don't apply 
         // quantization
@@ -366,53 +363,41 @@ _from_float (const float *src, T *dst, size_t nvals,
 
 const void *
 pvt::convert_from_float (const float *src, void *dst, size_t nvals,
-                         int quant_black, int quant_white,
-                         int quant_min, int quant_max,
-                         TypeDesc format)
+                         int quant_min, int quant_max, TypeDesc format)
 {
     switch (format.basetype) {
     case TypeDesc::FLOAT :
         return src;
     case TypeDesc::HALF :
         return _from_float<half> (src, (half *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                                  quant_min, quant_max);
     case TypeDesc::DOUBLE :
         return _from_float (src, (double *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::INT8:
         return _from_float (src, (char *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::UINT8 :
         return _from_float (src, (unsigned char *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::INT16 :
         return _from_float (src, (short *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::UINT16 :
         return _from_float (src, (unsigned short *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::INT :
         return _from_float (src, (int *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::UINT :
         return _from_float (src, (unsigned int *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::INT64 :
         return _from_float (src, (long long *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     case TypeDesc::UINT64 :
         return _from_float (src, (unsigned long long *)dst, nvals,
-                           quant_black, quant_white, quant_min,
-                           quant_max);
+                            quant_min, quant_max);
     default:
         ASSERT (0 && "ERROR from_float: bad format");
         return NULL;
@@ -420,11 +405,20 @@ pvt::convert_from_float (const float *src, void *dst, size_t nvals,
 }
 
 
+// DEPRECATED (1.4)
+const void *
+pvt::convert_from_float (const float *src, void *dst, size_t nvals,
+                         int quant_black, int quant_white,
+                         int quant_min, int quant_max,
+                         TypeDesc format)
+{
+    return convert_from_float (src, dst, nvals, quant_min, quant_max, format);
+}
+
+
 
 const void *
 pvt::parallel_convert_from_float (const float *src, void *dst, size_t nvals,
-                                  int quant_black, int quant_white,
-                                  int quant_min, int quant_max,
                                   TypeDesc format, int nthreads)
 {
     if (format.basetype == TypeDesc::FLOAT)
@@ -437,9 +431,11 @@ pvt::parallel_convert_from_float (const float *src, void *dst, size_t nvals,
     if (nthreads <= 0)
         nthreads = oiio_threads;
 
+    int quant_min, quant_max;
+    get_default_quantize (format, quant_min, quant_max);
+
     if (nthreads <= 1)
-        return convert_from_float (src, dst, nvals, quant_black, quant_white,
-                                   quant_min, quant_max, format);
+        return convert_from_float (src, dst, nvals, quant_min, quant_max, format);
 
     boost::thread_group threads;
     size_t blocksize = std::max (quanta, size_t((nvals + nthreads - 1) / nthreads));
@@ -450,12 +446,24 @@ pvt::parallel_convert_from_float (const float *src, void *dst, size_t nvals,
         size_t end = std::min (begin + blocksize, nvals);
         threads.add_thread (new boost::thread (
                                 boost::bind (convert_from_float, src+begin,
-                                            (char *)dst+begin*format.size(),
-                                            end-begin, quant_black, quant_white,
-                                            quant_min, quant_max, format)));
+                                             (char *)dst+begin*format.size(),
+                                             end-begin, quant_min, quant_max, format)));
     }
     threads.join_all ();
     return dst;
+}
+
+
+
+// DEPRECATED (1.4)
+const void *
+pvt::parallel_convert_from_float (const float *src, void *dst,
+                                  size_t nvals,
+                                  int quant_black, int quant_white,
+                                  int quant_min, int quant_max,
+                                  TypeDesc format, int nthreads)
+{
+    return parallel_convert_from_float (src, dst, nvals, format, nthreads);
 }
 
 
@@ -709,6 +717,40 @@ int shutdown_exr_threads ()
 
 
 void
+add_dither (int nchannels, int width, int height, int depth,
+            float *data, stride_t xstride, stride_t ystride, stride_t zstride,
+            float ditheramplitude,
+            int alpha_channel, int z_channel, unsigned int ditherseed,
+            int chorigin, int xorigin, int yorigin, int zorigin)
+{
+    ImageSpec::auto_stride (xstride, ystride, zstride,
+                            sizeof(float), nchannels, width, height);
+    char *plane = (char *)data;
+    for (int z = 0;  z < depth;  ++z, plane += zstride) {
+        char *scanline = plane;
+        for (int y = 0;  y < height;  ++y, scanline += ystride) {
+            char *pixel = scanline;
+            uint32_t ba = (z+zorigin)*1311 + yorigin+y;
+            uint32_t bb = ditherseed + (chorigin<<24);
+            uint32_t bc = xorigin;
+            for (int x = 0;  x < width;  ++x, pixel += xstride) {
+                float *val = (float *)pixel;
+                for (int c = 0;  c < nchannels;  ++c, ++val, ++bc) {
+                    bjhash::bjmix (ba, bb, bc);
+                    int channel = c+chorigin;
+                    if (channel == alpha_channel || channel == z_channel)
+                        continue;
+                    float dither = bc / float(std::numeric_limits<uint32_t>::max());
+                    *val += ditheramplitude * (dither - 0.5f);
+                }
+            }
+        }
+    }
+}
+
+
+
+void
 DeepData::init (int npix, int nchan,
                 const TypeDesc *chbegin, const TypeDesc *chend)
 {
@@ -769,6 +811,56 @@ DeepData::free ()
     std::vector<unsigned int>().swap (nsamples);
     std::vector<void *>().swap (pointers);
     std::vector<char>().swap (data);
+}
+
+
+
+void *
+DeepData::channel_ptr (int pixel, int channel) const
+{
+    if (pixel < 0 || pixel >= npixels || channel < 0 || channel >= nchannels)
+        return NULL;
+    return pointers[pixel*nchannels + channel];
+}
+
+
+
+float
+DeepData::deep_value (int pixel, int channel, int sample) const
+{
+    if (pixel < 0 || pixel >= npixels || channel < 0 || channel >= nchannels)
+        return 0.0f;
+    int nsamps = nsamples[pixel];
+    if (nsamps == 0 || sample < 0 || sample >= nsamps)
+        return 0.0f;
+    const void *ptr = pointers[pixel*nchannels + channel];
+    if (! ptr)
+        return 0.0f;
+    switch (channeltypes[channel].basetype) {
+    case TypeDesc::FLOAT :
+        return ((const float *)ptr)[sample];
+    case TypeDesc::HALF  :
+        return ((const half *)ptr)[sample];
+    case TypeDesc::UINT8 :
+        return ConstDataArrayProxy<unsigned char,float>((const unsigned char *)ptr)[sample];
+    case TypeDesc::INT8  :
+        return ConstDataArrayProxy<char,float>((const char *)ptr)[sample];
+    case TypeDesc::UINT16:
+        return ConstDataArrayProxy<unsigned short,float>((const unsigned short *)ptr)[sample];
+    case TypeDesc::INT16 :
+        return ConstDataArrayProxy<short,float>((const short *)ptr)[sample];
+    case TypeDesc::UINT  :
+        return ConstDataArrayProxy<unsigned int,float>((const unsigned int *)ptr)[sample];
+    case TypeDesc::INT   :
+        return ConstDataArrayProxy<int,float>((const int *)ptr)[sample];
+    case TypeDesc::UINT64:
+        return ConstDataArrayProxy<unsigned long long,float>((const unsigned long long *)ptr)[sample];
+    case TypeDesc::INT64 :
+        return ConstDataArrayProxy<long long,float>((const long long *)ptr)[sample];
+    default:
+        ASSERT (0);
+        return 0.0f;
+    }
 }
 
 

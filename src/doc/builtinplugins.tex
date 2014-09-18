@@ -170,6 +170,8 @@ pixel (ms) \\
 \qkw{dpx:BreakPoint} & float & breakpoint \\
 \qkw{dpx:WhiteLevel} & float & reference white level code value \\
 \qkw{dpx:IntegrationTimes} & float & integration time (s) \\
+\qkw{dpx:EndOfLinePadding} & int & Padded bytes at the end of each line \\
+\qkw{dpx:EndOfImagePadding} & int & Padded bytes at the end of each image \\
 \end{tabular}
 
 %\subsubsection*{Limitations}
@@ -288,6 +290,8 @@ despite its technical limitations.
 \hline
 \qkw{gif:DelayMs} & int & Delay between frames in miliseconds. \\
 \qkw{gif:Interlacing} & int & Specifies if image is interlaced (0 or 1). \\
+\qkw{gif:LoopCount} & int & Number of times the animation should be played 
+(0--65535, 0 stands for infinity). \\
 \qkw{ImageDescription} & string & The GIF comment field.
 \end{tabular}
 
@@ -386,7 +390,7 @@ OIIO Attribute & Type & DPX header data or explanation \\
 \qkw{Artist} & string & The IFF ``author'' \\
 \qkw{DateTime} & string & Creation date/time \\
 \qkw{compression} & string & The compression type \\
-\qkw{oiio:BitsPerSample} & int & the true bits per sample of the DPX file. \\
+\qkw{oiio:BitsPerSample} & int & the true bits per sample of the IFF file. \\
 \end{tabular} 
 
 
@@ -430,8 +434,9 @@ anywhere near the acceptance of the original JPEG/JFIF format.
 \qkw{ImageDescription} & string & the JPEG Comment field \\
 \qkw{Orientation} & int & the image orientation \\[2ex]
 \qkw{XResolution}, \qkw{YResolution},
-\qkw{ResolutionUnit} & & The resolution and units from the Exif header
-\\
+\qkw{ResolutionUnit} & & The resolution and units from the Exif header \\[2ex]
+\qkw{CompressionQuality} & int & Quality of compression (1-100) \\[2ex]
+\qkw{ICCProfile} & uint8[] & The ICC color profile \\
 & & \\
 Exif, IPTC, XMP, GPS & & Extensive Exif, IPTC, XMP, and GPS data are supported by the
   reader/writer, and you should assume that nearly everything described
@@ -519,9 +524,11 @@ The official OpenEXR site is \url{http://www.openexr.com/}.
 \qkw{ExposureTime} & float & expTime \\
 \qkw{FNumber} & float & aperture \\
 \qkw{compression} & string & one of: \qkw{none}, \qkw{rle},
-  \qkw{zip}, \qkw{piz}, \qkw{pxr24}, \qkw{b44}, or \qkw{b44a}.  If the
+  \qkw{zip}, \qkw{piz}, \qkw{pxr24}, \qkw{b44}, \qkw{b44a},
+  \qkw{dwaa}, or \qkw{dwab}.  If the
   writer receives a request for a compression type it does not
-  recognize, it will use \qkw{zip} by default. \\
+  recognize or is not supported by the version of OpenEXR on the system,
+  it will use \qkw{zip} by default. \\
 \qkw{textureformat} & string & set to \qkw{Plain Texture} for
   MIP-mapped OpenEXR files, \qkw{CubeFace Environment} or \qkw{Latlong
     Environment} for OpenEXR environment maps.  Non-environment
@@ -542,6 +549,8 @@ The official OpenEXR site is \url{http://www.openexr.com/}.
  \\
 \qkws{openexr:roundingmode} & int & the MIPmap rounding mode of the
   file. \\[2ex]
+\qkws{openexr:dwaCompressionLevel} & float & compression level for
+   dwaa or dwab compression (default: 45.0). \\
 \emph{other} & & All other attributes will be added to the \ImageSpec by their
   name and apparent type.
 \end{tabular}
@@ -580,7 +589,8 @@ PNG files use the file extension {\cf .png}.
 \qkw{DateTime} & string & the timestamp in the PNG header \\
 \qkw{PixelAspectRatio} & float & pixel aspect ratio \\
 \qkw{XResolution} \qkw{YResolution}
-  \qkw{ResolutionUnit} & & resolution and units from the PNG header. 
+  \qkw{ResolutionUnit} & & resolution and units from the PNG header. \\
+\qkw{ICCProfile} & uint8[] & The ICC color profile \\
 \end{tabular}
 
 \subsubsection*{Limitations}
@@ -799,6 +809,31 @@ files and is unable to write them.
 
 \vspace{.25in}
 
+\section{RAW digital camera files}
+\label{sec:bundledplugins:raw}
+\index{RAW digital camera files}
+
+A variety of digital camera ``raw'' formats are supported via this
+plugin that is based on the LibRaw library ({\cf http://www.libraw.org/}).
+
+
+% FIXME - fill in more docs here
+
+\begin{comment}
+%\subsubsection*{Attributes}
+\vspace{.125in}
+
+\noindent\begin{tabular}{p{1.75in}|p{0.5in}|p{3.0in}}
+\ImageSpec Attribute & Type & PIC header data or explanation \\
+\hline
+\qkw{ImageDescription} & string & comment \\
+\qkw{oiio:BitsPerSample} & int & the true bits per sample in the PIC file.
+\end{tabular}
+\end{comment}
+
+
+\vspace{.25in}
+
 \section{Targa}
 \label{sec:bundledplugins:targa}
 \index{Targa}
@@ -916,6 +951,7 @@ metadata if present.
 \qkws{ResolutionUnit} & string & ResolutionUnit (\qkw{in} or
   \qkw{cm}). \\
 \qkw{Orientation} & int & Orientation \\
+\qkw{ICCProfile} & uint8[] & The ICC color profile \\
 \qkw{textureformat} & string & {\cf PIXAR_TEXTUREFORMAT} \\
 \qkw{wrapmodes} & string & {\cf PIXAR_WRAPMODES} \\
 \qkw{fovcot} & float & {\cf PIXAR_FOVCOT} \\

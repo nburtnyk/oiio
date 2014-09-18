@@ -34,10 +34,10 @@
 
 #include "dds_pvt.h"
 
-#include "dassert.h"
-#include "typedesc.h"
-#include "imageio.h"
-#include "fmath.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/fmath.h"
 
 #include "squish/squish.h"
 
@@ -667,7 +667,7 @@ DDSInput::read_native_tile (int x, int y, int z, void *data)
         lastx = x;
         lasty = y;
         lastz = z;
-        unsigned int w, h, d;
+        unsigned int w = 0, h = 0, d = 0;
 #ifdef DDS_3X2_CUBE_MAP_LAYOUT
         internal_seek_subimage (((x / m_spec.tile_width) << 1)
                                 + y / m_spec.tile_height,

@@ -36,10 +36,10 @@
 #include "libdpx/DPX.h"
 #include "libdpx/DPXColorConverter.h"
 
-#include "typedesc.h"
-#include "imageio.h"
-#include "fmath.h"
-#include "strutil.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/fmath.h"
+#include "OpenImageIO/strutil.h"
 
 OIIO_PLUGIN_NAMESPACE_BEGIN
 
@@ -69,6 +69,9 @@ public:
     virtual bool close ();
     virtual bool write_scanline (int y, int z, TypeDesc format,
                                  const void *data, stride_t xstride);
+    virtual bool write_tile (int x, int y, int z, TypeDesc format,
+                             const void *data, stride_t xstride,
+                             stride_t ystride, stride_t zstride);
 
 private:
     OutStream *m_stream;
@@ -87,6 +90,8 @@ private:
     int m_subimages_to_write;
     std::vector<ImageSpec> m_subimage_specs;
     bool m_write_pending;   // subimage buffer needs to be written
+    unsigned int m_dither;
+    std::vector<unsigned char> m_tilebuffer;
 
     // Initialize private members to pre-opened state
     void init (void) {
@@ -393,26 +398,33 @@ DPXOutput::open (const std::string &name, const ImageSpec &userspec,
         m_dpx.header.SetSourceTimeDate (srcdate.c_str ());
     }
 
+    // set the user data size
+    ImageIOParameter *user = m_spec.find_attribute ("dpx:UserData");
+    if (user && user->datasize () > 0 && user->datasize () <= 1024 * 1024) {
+        m_dpx.SetUserData (user->datasize ());
+    }
+
     // commit!
     if (!m_dpx.WriteHeader ()) {
         error ("Failed to write DPX header");
         return false;
     }
 
-    // user data
-    ImageIOParameter *user = m_spec.find_attribute ("dpx:UserData");
-    if (user && user->datasize () > 0) {
-        if (user->datasize () > 1024 * 1024) {
-            error ("User data block size exceeds 1 MB");
-            return false;
-        }
-        // FIXME: write the missing libdpx code
-        /*m_dpx.SetUserData (user->datasize ());
+    // write the user data
+    if (user && user->datasize () > 0 && user->datasize() <= 1024 * 1024) {
         if (!m_dpx.WriteUserData ((void *)user->data ())) {
             error ("Failed to write user data");
             return false;
-        }*/
+        }
     }
+
+    m_dither = (m_spec.format == TypeDesc::UINT8) ?
+                    m_spec.get_int_attribute ("oiio:dither", 0) : 0;
+
+    // If user asked for tiles -- which this format doesn't support, emulate
+    // it by buffering the whole image.
+    if (m_spec.tile_width && m_spec.tile_height)
+        m_tilebuffer.resize (m_spec.image_bytes());
 
     return prep_subimage (m_subimage, true);
 }
@@ -450,6 +462,23 @@ DPXOutput::prep_subimage (int s, bool allocate)
         m_packing = dpx::kFilledMethodB;
     else
         m_packing = dpx::kFilledMethodA;
+
+    switch (m_spec.format.basetype) {
+    case TypeDesc::UINT8 :
+    case TypeDesc::UINT16 :
+    case TypeDesc::FLOAT :
+    case TypeDesc::DOUBLE :
+        // supported, fine
+        break;
+    case TypeDesc::HALF :
+        // Turn half into float
+        m_spec.format.basetype = TypeDesc::FLOAT;
+        break;
+    default:
+        // Turn everything else into UINT16
+        m_spec.format.basetype = TypeDesc::UINT16;
+        break;
+    }
 
     // calculate target bit depth
     m_bitdepth = m_spec.format.size () * 8;
@@ -533,12 +562,22 @@ DPXOutput::write_buffer ()
 bool
 DPXOutput::close ()
 {
-    bool ok = true;
-    if (m_stream) {
-        ok &= write_buffer ();
-        m_dpx.Finish ();
+    if (! m_stream) {   // already closed
+        init ();
+        return true;
     }
 
+    bool ok = true;
+    if (m_spec.tile_width) {
+        // Handle tile emulation -- output the buffered pixels
+        ASSERT (m_tilebuffer.size());
+        ok &= write_scanlines (m_spec.y, m_spec.y+m_spec.height, 0,
+                               m_spec.format, &m_tilebuffer[0]);
+        std::vector<unsigned char>().swap (m_tilebuffer);
+    }
+
+    ok &= write_buffer ();
+    m_dpx.Finish ();
     init();  // Reset to initial state
     return ok;
 }
@@ -553,7 +592,8 @@ DPXOutput::write_scanline (int y, int z, TypeDesc format,
 
     m_spec.auto_stride (xstride, format, m_spec.nchannels);
     const void *origdata = data;
-    data = to_native_scanline (format, data, xstride, m_scratch);
+    data = to_native_scanline (format, data, xstride, m_scratch,
+                               m_dither, y, z);
     if (data == origdata) {
         m_scratch.assign ((unsigned char *)data,
                           (unsigned char *)data+m_spec.scanline_bytes());
@@ -569,6 +609,18 @@ DPXOutput::write_scanline (int y, int z, TypeDesc format,
         return false;
 
     return true;
+}
+
+
+
+bool
+DPXOutput::write_tile (int x, int y, int z, TypeDesc format,
+                       const void *data, stride_t xstride,
+                       stride_t ystride, stride_t zstride)
+{
+    // Emulate tiles by buffering the whole image
+    return copy_tile_to_image_buffer (x, y, z, format, data, xstride,
+                                      ystride, zstride, &m_tilebuffer[0]);
 }
 
 

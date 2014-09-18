@@ -1,11 +1,12 @@
 #!/usr/bin/env python 
 
+import math
 import OpenImageIO as oiio
 from OpenImageIO import ImageBuf, ImageSpec, ImageBufAlgo
 
 
 
-def constimage (xres, yres, chans=3, format=oiio.UINT8, value=(0,0,0),
+def make_constimage (xres, yres, chans=3, format=oiio.UINT8, value=(0,0,0),
                 xoffset=0, yoffset=0) :
     spec = ImageSpec (xres,yres,chans,format)
     spec.x = xoffset
@@ -20,7 +21,7 @@ def write (image, filename, format=oiio.UNKNOWN) :
         image.set_write_format (format)
         image.write (filename)
     if image.has_error :
-        print "Error writing", filename, ":", b.geterror()
+        print "Error writing", filename, ":", image.geterror()
 
 
 
@@ -33,7 +34,7 @@ try:
     grid = ImageBuf (gridname)
     checker = ImageBuf(ImageSpec(256, 256, 3, oiio.UINT8))
     ImageBufAlgo.checker (checker, 8, 8, 8, (0,0,0), (1,1,1))
-    gray128 = constimage (128, 128, 3, oiio.HALF, (0.5,0.5,0.5))
+    gray128 = make_constimage (128, 128, 3, oiio.HALF, (0.5,0.5,0.5))
 
     # black
     b = ImageBuf (ImageSpec(320,240,3,oiio.UINT8))
@@ -78,11 +79,31 @@ try:
     ImageBufAlgo.crop (b, grid, oiio.ROI(50,150,200,600))
     write (b, "crop.tif")
 
+    # cut
+    b = ImageBuf()
+    ImageBufAlgo.cut (b, grid, oiio.ROI(50,150,200,600))
+    write (b, "cut.tif")
+
     # paste
     b = ImageBuf()
     b.copy (checker)
     ImageBufAlgo.paste (b, 150, 75, 0, 0, grid)
     write (b, "pasted.tif")
+
+    # rotate90
+    b = ImageBuf()
+    ImageBufAlgo.rotate90 (b, ImageBuf("../oiiotool/image.tif"))
+    write (b, "rotate90.tif")
+
+    # rotate180
+    b = ImageBuf()
+    ImageBufAlgo.rotate180 (b, ImageBuf("../oiiotool/image.tif"))
+    write (b, "rotate180.tif")
+
+    # rotate270
+    b = ImageBuf()
+    ImageBufAlgo.rotate270 (b, ImageBuf("../oiiotool/image.tif"))
+    write (b, "rotate270.tif")
 
     # flip
     b = ImageBuf()
@@ -98,6 +119,16 @@ try:
     b = ImageBuf()
     ImageBufAlgo.flipflop (b, ImageBuf("../oiiotool/image.tif"))
     write (b, "flipflop.tif")
+
+    # reorient
+    b = ImageBuf()
+    image_small = ImageBuf()
+    ImageBufAlgo.resample (image_small, ImageBuf("../oiiotool/image.tif"),  roi=oiio.ROI(0,160,0,120))
+    ImageBufAlgo.rotate90 (image_small, image_small)
+    image_small.specmod().attribute ("Orientation", 8)
+    ImageBufAlgo.reorient (b, image_small)
+    write (b, "reorient1.tif")
+    image_small = ImageBuf()
 
     # transpose
     b = ImageBuf()
@@ -124,14 +155,14 @@ try:
     ImageBufAlgo.add (b, gray128, (0, 0.25, -0.25))
     write (b, "cadd2.exr")
     b = ImageBuf()
-    ImageBufAlgo.add (b, constimage(64,64,3,oiio.HALF,(.1,.2,.3)),
-                      constimage(64,64,3,oiio.HALF,(.1,.1,.1),20,20))
+    ImageBufAlgo.add (b, make_constimage(64,64,3,oiio.HALF,(.1,.2,.3)),
+                      make_constimage(64,64,3,oiio.HALF,(.1,.1,.1),20,20))
     write (b, "add.exr")
 
     # sub
     b = ImageBuf()
-    ImageBufAlgo.sub (b, constimage(64,64,3,oiio.HALF,(.1,.2,.3)),
-                      constimage(64,64,3,oiio.HALF,(.1,.1,.1),20,20))
+    ImageBufAlgo.sub (b, make_constimage(64,64,3,oiio.HALF,(.1,.2,.3)),
+                      make_constimage(64,64,3,oiio.HALF,(.1,.1,.1),20,20))
     write (b, "sub.exr")
 
     # mul
@@ -143,9 +174,17 @@ try:
     write (b, "cmul2.exr")
     # FIXME -- image multiplication; it's not in testsuite/oiiotool either
     # b = ImageBuf()
-    # ImageBufAlgo.mul (b, constimage(64,64,3,oiio.HALF,(.1,.2,.3)),
-    #                        constimage(64,64,3,oiio.HALF,(.1,.1,.1),20,20))
+    # ImageBufAlgo.mul (b, make_constimage(64,64,3,oiio.HALF,(.1,.2,.3)),
+    #                        make_constimage(64,64,3,oiio.HALF,(.1,.1,.1),20,20))
     # write (b, "mul.exr")
+
+    # pow
+    b = ImageBuf()
+    ImageBufAlgo.pow (b, gray128, 2)
+    write (b, "cpow1.exr")
+    b = ImageBuf()
+    ImageBufAlgo.pow (b, gray128, (2,2,1))
+    write (b, "cpow2.exr")
 
     # channel_sum
     b = ImageBuf()
@@ -154,7 +193,7 @@ try:
     write (b, "chsum.tif", oiio.UINT8)
 
     # premult/unpremult
-    b = constimage(100,100,4,oiio.FLOAT,(.1,.1,.1,1))
+    b = make_constimage(100,100,4,oiio.FLOAT,(.1,.1,.1,1))
     ImageBufAlgo.fill (b, (.2,.2,.2,.5), oiio.ROI(50,80,50,80))
     ImageBufAlgo.unpremult (b, b)
     write (b, "unpremult.tif")
@@ -201,7 +240,7 @@ try:
     # color_count, color_range_check
 
     # nonzero_region
-    b = constimage (256,256,3,oiio.UINT8,(0,0,0))
+    b = make_constimage (256,256,3,oiio.UINT8,(0,0,0))
     ImageBufAlgo.fill (b, (0,0,0))
     ImageBufAlgo.fill (b, (0,1,0), oiio.ROI(100,180,100,180))
     print "Nonzero region is: ", ImageBufAlgo.nonzero_region(b)
@@ -216,22 +255,48 @@ try:
     ImageBufAlgo.resample (b, grid, roi=oiio.ROI(0,128,0,128))
     write (b, "resample.tif")
 
+    # warp
+    b = ImageBuf()
+    Mwarp = (0.7071068, 0.7071068, 0, -0.7071068, 0.7071068, 0, 128, -53.01933, 1)
+    ImageBufAlgo.warp (b, ImageBuf("resize.tif"), Mwarp)
+    write (b, "warped.tif")
+
+    # rotate
+    b = ImageBuf()
+    ImageBufAlgo.rotate (b, ImageBuf("resize.tif"), math.radians(45.0))
+    write (b, "rotated.tif")
+    b = ImageBuf()
+    ImageBufAlgo.rotate (b, ImageBuf("resize.tif"), math.radians(45.0), 50.0, 50.0)
+    write (b, "rotated-offcenter.tif")
+
     # make_kernel
     bsplinekernel = ImageBuf()
     ImageBufAlgo.make_kernel (bsplinekernel, "bspline", 15, 15)
     write (bsplinekernel, "bsplinekernel.exr")
 
-    # convolve
+    # convolve -- test with bspline blur
     b = ImageBuf()
     ImageBufAlgo.convolve (b, ImageBuf("../oiiotool/tahoe-small.tif"),
                            bsplinekernel)
     write (b, "bspline-blur.tif", oiio.UINT8)
+
+    # median filter
+    b = ImageBuf()
+    ImageBufAlgo.median_filter (b, ImageBuf("../oiiotool/tahoe-small.tif"),
+                                5, 5)
+    write (b, "tahoe-median.tif", oiio.UINT8)
 
     # unsharp_mask
     b = ImageBuf()
     ImageBufAlgo.unsharp_mask (b, ImageBuf("../oiiotool/tahoe-small.tif"),
                                "gaussian", 3.0, 1.0, 0.0)
     write (b, "unsharp.tif", oiio.UINT8)
+
+    # unsharp_mark with median filter
+    b = ImageBuf()
+    ImageBufAlgo.unsharp_mask (b, ImageBuf("../oiiotool/tahoe-small.tif"),
+                               "median", 3.0, 1.0, 0.0)
+    write (b, "unsharp-median.tif", oiio.UINT8)
 
     # computePixelHashSHA1
     print ("SHA-1 of bsplinekernel.exr is: " + 
@@ -251,6 +316,16 @@ try:
     write (b, "ifft.exr", oiio.HALF)
     inv.clear()
     fft.clear()
+
+    fft = ImageBuf("fft.exr")
+    polar = ImageBuf()
+    ImageBufAlgo.complex_to_polar (polar, fft)
+    b = ImageBuf()
+    ImageBufAlgo.polar_to_complex (b, polar)
+    write (polar, "polar.exr", oiio.HALF)
+    write (b, "complex.exr", oiio.HALF)
+    fft.clear()
+    polar.clear()
 
     # fixNonFinite
     bad = ImageBuf ("../oiiotool-fixnan/bad.exr")
@@ -272,7 +347,7 @@ try:
 
     # FIXME - no test for zover (not in oiio-composite either)
 
-    # FIXME - no test for render_text (not in oiiotool, either)
+    # FIXME - no test for render_text
 
     # histogram, histogram_draw,
 

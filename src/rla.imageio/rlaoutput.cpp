@@ -33,13 +33,13 @@
 #include <cmath>
 #include <ctime>
 
-#include "dassert.h"
-#include "typedesc.h"
-#include "imageio.h"
-#include "filesystem.h"
-#include "fmath.h"
-#include "strutil.h"
-#include "sysutil.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/typedesc.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/fmath.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/sysutil.h"
 
 #include "rla_pvt.h"
 
@@ -64,6 +64,9 @@ public:
     virtual bool close ();
     virtual bool write_scanline (int y, int z, TypeDesc format,
                                  const void *data, stride_t xstride);
+    virtual bool write_tile (int x, int y, int z, TypeDesc format,
+                             const void *data, stride_t xstride,
+                             stride_t ystride, stride_t zstride);
 
 private:
     std::string m_filename;           ///< Stash the filename
@@ -72,6 +75,8 @@ private:
     RLAHeader m_rla;                  ///< Wavefront RLA header
     std::vector<uint32_t> m_sot;      ///< Scanline offset table
     std::vector<unsigned char> m_rle; ///< Run record buffer for RLE
+    std::vector<unsigned char> m_tilebuffer;
+    unsigned int m_dither;
 
     // Initialize private members to pre-opened state
     void init (void) {
@@ -83,8 +88,10 @@ private:
     inline void set_chromaticity (const ImageIOParameter *p, char *dst,
                                   size_t field_size, const char *default_val);
     
-    /// Helper - handles the repetitive work of encoding and writing a channel
-    bool encode_channel (const unsigned char *data, stride_t xstride,
+    // Helper - handles the repetitive work of encoding and writing a
+    // channel. The data is guaranteed to be in the scratch area and need
+    // not be preserved.
+    bool encode_channel (unsigned char *data, stride_t xstride,
                          TypeDesc chantype, int bits);
     
     /// Helper - write, with error detection
@@ -203,6 +210,9 @@ RLAOutput::open (const std::string &name, const ImageSpec &userspec,
         return false;
     }
 
+    m_dither = (m_spec.format == TypeDesc::UINT8) ?
+                    m_spec.get_int_attribute ("oiio:dither", 0) : 0;
+
     // prepare and write the RLA header
     memset (&m_rla, 0, sizeof (m_rla));
     // frame and window coordinates
@@ -261,8 +271,16 @@ RLAOutput::open (const std::string &name, const ImageSpec &userspec,
     } else {
         m_rla.ColorChannelType = m_rla.MatteChannelType = m_rla.AuxChannelType =
             m_spec.format == TypeDesc::FLOAT ? CT_FLOAT : CT_BYTE;
-        m_rla.NumOfChannelBits = m_rla.NumOfMatteBits = m_rla.NumOfAuxBits =
-            m_spec.format.size () * 8;
+        int bits = m_spec.get_int_attribute ("oiio:BitsPerSample", 0);
+        if (bits) {
+            m_rla.NumOfChannelBits = bits;
+        } else {
+            if (m_spec.channelformats.size())
+                m_rla.NumOfChannelBits = m_spec.channelformats[0].size() * 8;
+            else
+                m_rla.NumOfChannelBits = m_spec.format.size() * 8;
+        }
+        m_rla.NumOfMatteBits = m_rla.NumOfAuxBits = m_rla.NumOfChannelBits;
         if (remaining >= 3) {
             // if we have at least 3 channels, treat them as colour
             m_rla.NumOfColorChannels = 3;
@@ -363,7 +381,12 @@ RLAOutput::open (const std::string &name, const ImageSpec &userspec,
     // zeroes upon seek
     m_sot.resize (m_spec.height, (int32_t)0);
     write (&m_sot[0], m_sot.size());
-    
+
+    // If user asked for tiles -- which this format doesn't support, emulate
+    // it by buffering the whole image.
+    if (m_spec.tile_width && m_spec.tile_height)
+        m_tilebuffer.resize (m_spec.image_bytes());
+
     return true;
 }
 
@@ -394,26 +417,35 @@ RLAOutput::set_chromaticity (const ImageIOParameter *p, char *dst,
 bool
 RLAOutput::close ()
 {
-    if (m_file) {
-        // Now that all scanlines ahve been output, return to write the
-        // correct scanline offset table to file.
-        fseek (m_file, sizeof(RLAHeader), SEEK_SET);
-        write (&m_sot[0], m_sot.size());
-
-        // close the stream
-        fclose (m_file);
-        m_file = NULL;
+    if (! m_file) {   // already closed
+        init ();
+        return true;
     }
+
+    bool ok = true;
+    if (m_spec.tile_width) {
+        // Handle tile emulation -- output the buffered pixels
+        ASSERT (m_tilebuffer.size());
+        ok &= write_scanlines (m_spec.y, m_spec.y+m_spec.height, 0,
+                               m_spec.format, &m_tilebuffer[0]);
+        std::vector<unsigned char>().swap (m_tilebuffer);
+    }
+
+    // Now that all scanlines ahve been output, return to write the
+    // correct scanline offset table to file and close the stream.
+    fseek (m_file, sizeof(RLAHeader), SEEK_SET);
+    write (&m_sot[0], m_sot.size());
+    fclose (m_file);
+    m_file = NULL;
     
     init ();      // re-initialize
-    return true;  // How can we fail?
-                  // Epicly. -- IneQuation
+    return ok;
 }
 
 
 
 bool
-RLAOutput::encode_channel (const unsigned char *data, stride_t xstride,
+RLAOutput::encode_channel (unsigned char *data, stride_t xstride,
                            TypeDesc chantype, int bits)
 {
     if (chantype == TypeDesc::FLOAT) {
@@ -423,6 +455,14 @@ RLAOutput::encode_channel (const unsigned char *data, stride_t xstride,
         for (int x = 0;  x < m_spec.width;  ++x)
             write ((const float *)&data[x*xstride]);
         return true;
+    }
+
+    if (chantype == TypeDesc::UINT16 && bits != 16) {
+        // Need to do bit scaling. Safe to overwrite data in place.
+        for (int x = 0;  x < m_spec.width;  ++x) {
+            unsigned short *s = (unsigned short *)(data + x*xstride);
+            *s = bit_range_convert (*s, 16, bits);
+        }
     }
 
     m_rle.resize (2);   // reserve t bytes for the encoded size
@@ -512,7 +552,8 @@ RLAOutput::write_scanline (int y, int z, TypeDesc format,
 {
     m_spec.auto_stride (xstride, format, spec().nchannels);
     const void *origdata = data;
-    data = to_native_scanline (format, data, xstride, m_scratch);
+    data = to_native_scanline (format, data, xstride, m_scratch,
+                               m_dither, y, z);
     if (data == origdata) {
         m_scratch.assign ((unsigned char *)data,
                           (unsigned char *)data+m_spec.scanline_bytes());
@@ -539,6 +580,19 @@ RLAOutput::write_scanline (int y, int z, TypeDesc format,
 
     return true;
 }
+
+
+
+bool
+RLAOutput::write_tile (int x, int y, int z, TypeDesc format,
+                       const void *data, stride_t xstride,
+                       stride_t ystride, stride_t zstride)
+{
+    // Emulate tiles by buffering the whole image
+    return copy_tile_to_image_buffer (x, y, z, format, data, xstride,
+                                      ystride, zstride, &m_tilebuffer[0]);
+}
+
 
 OIIO_PLUGIN_NAMESPACE_END
 

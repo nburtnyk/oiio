@@ -31,9 +31,9 @@
 #define OPENIMAGEIO_BMP_H
 
 #include <cstdio>
-#include "imageio.h"
-#include "filesystem.h"
-#include "fmath.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/fmath.h"
 
 OIIO_PLUGIN_NAMESPACE_BEGIN
 
@@ -175,6 +175,9 @@ class BmpOutput : public ImageOutput {
     virtual bool close (void);
     virtual bool write_scanline (int y, int z, TypeDesc format,
                                  const void *data, stride_t xstride);
+    virtual bool write_tile (int x, int y, int z, TypeDesc format,
+                             const void *data, stride_t xstride,
+                             stride_t ystride, stride_t zstride);
  private:
     int m_scanline_size;
     FILE *m_fd;
@@ -182,6 +185,9 @@ class BmpOutput : public ImageOutput {
     bmp_pvt::BmpFileHeader m_bmp_header;
     bmp_pvt::DibInformationHeader m_dib_header;
     fpos_t m_image_start;
+    unsigned int m_dither;
+    std::vector<unsigned char> m_tilebuffer;
+
     void init (void) {
         m_scanline_size = 0;
         m_fd = NULL;

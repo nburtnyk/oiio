@@ -33,12 +33,12 @@
 #include <cstdlib>
 #include <string>
 
-#include "dassert.h"
-#include "half.h"
-#include "ustring.h"
-#include "strutil.h"
+#include <OpenEXR/half.h>
 
-#include "typedesc.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/ustring.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/typedesc.h"
 
 
 OIIO_NAMESPACE_ENTER
@@ -82,6 +82,35 @@ TypeDesc::basesize () const
     DASSERT (basetype < TypeDesc::LASTBASE);
     return basetype_size[basetype];
 }
+
+
+
+bool
+TypeDesc::is_floating_point () const
+{
+    static bool isfloat[] = {
+        0, // UNKNOWN
+        0, // VOID
+        0, // UCHAR
+        0, // CHAR
+        0, // USHORT
+        0, // SHORT
+        0, // UINT
+        0, // INT
+        0, // ULONGLONG
+        0, // LONGLONG
+        1, // HALF
+        1, // FLOAT
+        1, // DOUBLE
+        0, // STRING
+        0  // PTR
+    };
+    DASSERT (sizeof(isfloat)/sizeof(isfloat[0]) == TypeDesc::LASTBASE);
+    DASSERT (basetype < TypeDesc::LASTBASE);
+    return isfloat[basetype];
+}
+
+
 
 namespace {
 
@@ -349,6 +378,21 @@ std::string tostring (TypeDesc type, const void *data,
     }
 }
 
+
+
+bool
+TypeDesc::operator< (const TypeDesc &x) const
+{
+    if (basetype != x.basetype)
+        return basetype < x.basetype;
+    if (aggregate != x.aggregate)
+        return aggregate < x.aggregate;
+    if (arraylen != x.arraylen)
+        return arraylen < x.arraylen;
+    if (vecsemantics != x.vecsemantics)
+        return vecsemantics < x.vecsemantics;
+    return false;  // they are equal
+}
 
 
 

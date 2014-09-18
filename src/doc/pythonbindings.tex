@@ -352,16 +352,6 @@ Hold {\cf True} if the image is a \emph{deep} (multiple samples per pixel)
 image, of {\cf False} if it is an ordinary image.
 \apiend
 
-\apiitem{ImageSpec.{\ce quant_black} \\
-ImageSpec.{\ce quant_white} \\
-ImageSpec.{\ce quant_min} \\
-ImageSpec.{\ce quant_max}}
-The quantization parameters used when the \ImageSpec is used to specify
-how to open a file for output (refer to
-Section~\ref{sec:imageoutput:quantization} for
-a more complete explanation of each of these parameters.)
-\apiend
-
 \apiitem{ImageSpec.{\ce set_format} (basetype) \\
 ImageSpec.{\ce set_format} (typedesc)}
 Given a {\cf BASETYPE} or a \TypeDesc, sets the {\cf format} field and
@@ -378,11 +368,6 @@ data format.
 \apiitem{ImageSpec.{\ce default_channel_names} ()}
 Sets {\cf channel_names} to the default names given the value of
 the {\cf nchannels} field.
-\apiend
-
-\apiitem{ImageSpec.{\ce format_from_quantize} (black, white, min, max)}
-Given the quantization parameters, returns a \TypeDesc giving the best
-data format that matches the quantization.
 \apiend
 
 \apiitem{ImageSpec.{\ce channel_bytes} () \\
@@ -1420,6 +1405,19 @@ Sets pixel $(x,y,z)$ to be the {\cf pixel_value}, expressed as a tuple of
 \end{code}
 \apiend
 
+\apiitem{array ImageBuf.{\ce get_pixels} (format=OpenImageIO.UNKNOWN, roi=ROI.All)}
+\NEW % 1.5
+Retrieves the rectangle of pixels (and channels) specified by {\cf roi} from
+the image and returns them as an array of values with type specified by
+{\cf format}.
+
+\noindent Example:
+\begin{code}
+    buf = ImageBuf ("tahoe.jpg")
+    pixels = buf.get_pixels (oiio.FLOAT)  # no ROI means the whole image
+\end{code}
+\apiend
+
 \apiitem{bool ImageBuf.{\ce has_error} \\
 str ImageBuf.{\ce geterror} ()}
 The {\cf ImageBuf.has_error} field will be {\cf True} if an error has
@@ -1576,14 +1574,15 @@ names. (See the C++ version for more full explanation.)
 
     # Copy just the alpha channel, making a 1-channel image
     Alpha = ImageBuf()
-    ImageBufAlgo.channels (Alpha, RGBA, ("alpha",))
+    ImageBufAlgo.channels (Alpha, RGBA, ("A",))
 
     # Swap the R and B channels
     BGRA = ImageBuf()
     ImageBufAlgo.channels (BRGA, RGBA, (2, 1, 0, 3))
 
     # Add an alpha channel with value 1.0 everywhere to an RGB image
-    ImageBufAlgo.channels (RGBA, RGB, ("R", "G", "B", 1.0))
+    ImageBufAlgo.channels (RGBA, RGB, ("R", "G", "B", 1.0),
+                            ("R", "G", "B", "A"))
 \end{code}
 \apiend
 
@@ -1607,7 +1606,6 @@ the region of interest.
 \apiitem{bool ImageBufAlgo.{\ce flatten} (dst, src, roi=ROI.All, nthreads=0)}
 \index{ImageBufAlgo!flatten} \indexapi{flatten} \index{deep images}
 
-\NEW   % 1.3
 Composite the depth samples within each pixel of ``deep'' \ImageBuf\ {\cf
 src} and store the single  resulting value per pixel in ``flat'' \ImageBuf
 {\cf dst}.
@@ -1636,6 +1634,22 @@ Reset {\cf dst} to be the specified region of {\cf src}.
 \apiend
 
 
+\apiitem{bool ImageBufAlgo.{\ce cut} (dst, src, roi=ROI.All, nthreads=0)}
+\index{ImageBufAlgo!cut} \indexapi{cut}
+Reset {\cf dst} to be the specified region of {\cf src}, but moved so
+that the resulting new image has its pixel data at the image plane origin.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    # Set B to be the lower left 200x100 region of A, moved to the origin
+    A = ImageBuf ("a.tif")
+    B = ImageBuf()
+    ImageBufAlgo.cut (B, A, ROI(0,200,380,480))
+\end{code}
+\apiend
+
+
 \apiitem{bool ImageBufAlgo.{\ce paste} (dst, xbegin, ybegin, zbegin,
   chbegin, \\
   \bigspc\bigspc src, ROI srcroi=ROI.All, nthreads=0)}
@@ -1652,6 +1666,26 @@ offset {\cf (xbegin, ybegin, zbegin)}.
     ImageBufAlgo.paste (Big, 100, 100, 0, 0, Small)
 \end{code}
 \apiend
+
+
+\apiitem{bool ImageBufAlgo.{\ce rotate90} (dst, src, roi=ROI.All, nthreads=0) \\
+bool ImageBufAlgo.{\ce rotate180} (dst, src, roi=ROI.All, nthreads=0) \\
+bool ImageBufAlgo.{\ce rotate270} (dst, src, roi=ROI.All, nthreads=0)}
+\index{ImageBufAlgo!roate90} \indexapi{roate90}
+\index{ImageBufAlgo!rotate180} \indexapi{rotate180}
+\index{ImageBufAlgo!rotate270} \indexapi{rotate270}
+\NEW % 1.5
+Copy while rotating the image by a multiple of 90 degrees.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    A = ImageBuf ("tahoe.exr")
+    B = ImageBuf()
+    ImageBufAlgo.rotate90 (B, A)
+\end{code}
+\apiend
+
 
 
 \apiitem{bool ImageBufAlgo.{\ce flip} (dst, src, roi=ROI.All, nthreads=0) \\
@@ -1673,8 +1707,24 @@ or both vertically and horizontally (flipflip).
 \apiend
 
 
+\apiitem{bool ImageBufAlgo.{\ce reorient} (dst, src, nthreads=0)}
+\index{ImageBufAlgo!reorient} \indexapi{reorient}
+\NEW % 1.5
+Copy {\cf src} to {\cf dst}, but with whatever seties of rotations, flips,
+or flops are necessary to transform the pixels into the configuration
+suggested by the \qkw{Orientation} metadata of the image (and the
+\qkw{Orientation} metadata is then set to 1, ordinary orientation).
 
-\apiitem{bool ImageBufAlgo.{\ce transpose} (dst, src, oi=ROI.All, nthreads=0)}
+\smallskip
+\noindent Examples:
+\begin{code}
+    A = ImageBuf ("tahoe.jpg")
+    ImageBufAlgo.reorient (A, A)
+\end{code}
+\apiend
+
+
+\apiitem{bool ImageBufAlgo.{\ce transpose} (dst, src, roi=ROI.All, nthreads=0)}
 \index{ImageBufAlgo!transpose} \indexapi{transpose}
 Copy while transposing ($x \leftrightarrow y$) pixels.
 
@@ -1700,6 +1750,50 @@ Copy while circularly shifting by the given amount.
     A = ImageBuf ("tahoe.exr")
     B = ImageBuf()
     ImageBufAlgo.circular_shift (B, A, 200, 100)
+\end{code}
+\apiend
+
+
+\apiitem{bool ImageBufAlgo.{\ce rotate} (dst, src, angle, \\
+        \bigspc\bigspc filtername="", filtersize=0.0, recompute_roi=False, \\
+        \bigspc\bigspc  roi=ROI.All, nthreads=0) \\
+bool ImageBufAlgo.{\ce rotate} (dst, src, angle, \\
+        \bigspc\bigspc center_x, center_y, filtername="", filtersize=0.0, \\
+        \bigspc\bigspc  recompute_roi=False, roi=ROI.All, nthreads=0) }
+\index{ImageBufAlgo!rotate} \indexapi{rotate}
+\NEW % 1.5
+Set {\cf dst}, over the ROI, to be a rotated version of the
+corresponding portion of {\cf src}.  The angle is in radians, with positive
+values indicating clockwise rotation. If the filter and size are not
+specified, an appropriate default will be chosen.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    Src = ImageBuf ("tahoe.exr")
+    Dst = ImageBuf ()
+    ImageBufAlgo.rotate (Dst, Src, math.radians(45.0))
+\end{code}
+\apiend
+
+
+\apiitem{bool ImageBufAlgo.{\ce warp} (dst, src, M, filtername="", filtersize=0.0, \\
+        \bigspc\bigspc wrap=oiio.WrapDefault, recompute_roi=False, \\
+        \bigspc\bigspc roi=ROI.All, nthreads=0)}
+\index{ImageBufAlgo!warp} \indexapi{warp}
+\NEW % 1.5
+Set {\cf dst}, over the ROI, to be a warped (transformed) copy of {\cf src},
+with the warp specified by {\cf M} consisting of 9 floating-point numbers
+representing a $3 \times 3$ transformation matrix.  If the filter and size
+are not specified, an appropriate default will be chosen.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    M = (0.7071068, 0.7071068, 0, -0.7071068, 0.7071068, 0, 20, -8.284271, 1)
+    Src = ImageBuf ("tahoe.exr")
+    Dst = ImageBuf ()
+    ImageBufAlgo.warp (Dst, Src, M)
 \end{code}
 \apiend
 
@@ -1785,7 +1879,7 @@ be an \ImageBuf, a {\cf float} (added to all channels) or a tuple giving a
 \index{ImageBufAlgo!mul} \indexapi{mul}
 
 Compute {\cf dst} = {\cf A * B} (channel-by-channel multiplication).  {\cf A}
-is an \ImageBuf, and {\cf B}  may be an \ImageBuf, a {\cf float} (added to
+is an \ImageBuf, and {\cf B}  may be an \ImageBuf, a {\cf float} (scaling
 all channels) or a tuple giving a {\cf float} for each color channel.
 
 \smallskip
@@ -1797,6 +1891,24 @@ all channels) or a tuple giving a {\cf float} for each color channel.
 
     # Reduce intensity of buf's channels 0-2 by 50%, in place
     ImageBufAlgo.mul (buf, buf, (0.5, 0.5, 0.5, 1))
+\end{code}
+\apiend
+
+
+\apiitem{bool ImageBufAlgo.{\ce pow} (dst, A, B, roi=ROI.All, nthreads=0)}
+\index{ImageBufAlgo!pow} \indexapi{pow}
+
+Compute {\cf dst} = {\cf pow (A, B} (channel-by-channel exponentiation).
+{\cf A} is an \ImageBuf, and {\cf B} may be a {\cf float} (a single power
+for all channels) or a tuple giving a {\cf float} for each color channel.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    # Linearize a 2.2 gamma-corrected image (channels 0-2 only)
+    img = ImageBuf ("a.exr")
+    buf = ImageBuf ()
+    ImageBufAlgo.pow (buf, img, (2.2, 2.2, 2.2, 1.0))
 \end{code}
 \apiend
 
@@ -2188,7 +2300,8 @@ caution!
 
 Kernel names can be: \qkw{gaussian}, \qkw{sharp-gaussian}, \qkw{box},
 \qkw{triangle}, \qkw{mitchell}, \qkw{blackman-harris}, \qkw{b-spline},
-\qkw{catmull-rom}, \qkw{lanczos3}, \qkw{disk}, \qkw{binomial}. Note that
+\qkw{catmull-rom}, \qkw{lanczos3}, \qkw{cubic}, \qkw{keys}, \qkw{simon},
+\qkw{rifman}, \qkw{disk}, \qkw{binomial}. Note that
 \qkw{catmull-rom} and \qkw{lanczos3} are fixed-size kernels that don't
 scale with the width, and are therefore probably less useful in most
 cases.
@@ -2245,6 +2358,30 @@ Compute the forward or inverse discrete Fourier Transform.
 \apiend
 
 
+\apiitem{bool ImageBufAlgo.{\ce complex_to_polar} (dst, src, roi=ROI.All, nthreads=0) \\
+        bool ImageBufAlgo.{\ce polar_to_complex} (dst, src, roi=ROI.All, nthreads=0)}
+\index{ImageBufAlgo!polar_to_complex} \indexapi{polar_to_complex}
+\index{ImageBufAlgo!complex_to_polar} \indexapi{complex_to_polar}
+
+Transform a 2-channel image from complex (real, imaginary) representation
+to polar (amplitude, phase), or vice versa.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    Polar = ImageBuf ("polar.exr")
+
+    Complex = ImageBuf ()
+    ImageBufAlgo.polar_to_complex (Complex, Polar)
+
+    # At this point, Complex is a 2-channel complex image (real, imag)
+    # Convert it back from frequency domain to a spatial iamge
+    Spatial = ImageBuf ()
+    ImageBufAlgo.ifft (Spatial, Complex)
+\end{code}
+\apiend
+
+
 
 \subsection{Image Enhancement / Restoration}
 \label{sec:iba:py:enhance}
@@ -2288,6 +2425,24 @@ of src was < 1, dst will have a pixel color that is a plausible
     Src = ImageBuf ("holes.exr")
     Filled = ImageBuf ()
     ImageBufAlgo.fillholes_pushpull (Filled, Src)
+\end{code}
+\apiend
+
+
+\apiitem{bool ImageBufAlgo.{\ce median_filter} (dst, src, width=3, height=-1, \\
+  \bigspc\spc  roi=ROI.All, nthreads=0)}
+\index{ImageBufAlgo!median_filter} \indexapi{median_filter}
+
+\NEW % 1.5
+Replace the given ROI of {\cf dst} with a sharpened version of the
+corresponding region of {\cf src} using the ``unsharp mask'' technique.
+
+\smallskip
+\noindent Examples:
+\begin{code}
+    Noisy = ImageBuf ("tahoe.exr")
+    Clean = ImageBuf ()
+    ImageBufAlgo.median_filter (Clean, Noisy, 3, 3)
 \end{code}
 \apiend
 
@@ -2478,6 +2633,206 @@ recognized attribute.
     oiio.attribute ("threads", 0)
 \end{code}
 \apiend
+
+
+\section{Python Recipes}
+\label{sec:pythonrecipes}
+
+This section illustrates the Python syntax for doing many common image
+operations from Python scripts, but that aren't already given as examples
+in the earlier function descriptions.  All example code fragments assume the
+following boilerplate:
+
+\begin{code}
+    #!/usr/bin/env python 
+    
+    import OpenImageIO as oiio
+    from OpenImageIO import ImageBuf, ImageSpec, ImageBufAlgo
+\end{code}
+
+
+\subsubsection*{Subroutine to create a constant-colored image}
+\begin{code}
+    # Create an ImageBuf holding a n image of constant color, given the
+    # resolution, data format (defaulting to UINT8), fill value, and image
+    # origin.
+    def make_constimage (xres, yres, chans=3, format=oiio.UINT8, value=(0,0,0),
+                         xoffset=0, yoffset=0) :
+        spec = ImageSpec (xres,yres,chans,format)
+        spec.x = xoffset
+        spec.y = yoffset
+        b = ImageBuf (spec)
+        oiio.ImageBufAlgo.fill (b, value)
+        return b
+\end{code}
+
+\noindent The image is returned as an \ImageBuf, then up to the caller 
+what to do with it next.
+
+\subsubsection*{Subroutine to save an image to disk, printing errors}
+\begin{code}
+    # Save an ImageBuf to a given file name, with optional forced image format
+    # and error handling.
+    def write_image (image, filename, format=oiio.UNKNOWN) :
+        if not image.has_error :
+            image.set_write_format (format)
+            image.write (filename)
+        if image.has_error :
+            print "Error writing", filename, ":", image.geterror()
+\end{code}
+
+
+\subsubsection*{Converting between file formats}
+
+\begin{code}
+    img = ImageBuf ("input.png")
+    write_image (img, "output.tif")
+\end{code}
+
+
+\subsubsection*{Comparing two images and writing a difference image}
+
+\begin{code}
+    A = ImageBuf ("A.tif")
+    B = ImageBuf ("B.tif")
+    compresults = oiio.CompareResults()
+    ImageBufAlgo.compare (A, B, 1.0e-6, 1.0e-6, compresults)
+    if compresults.nfail > 0 :
+        print "Images did not match, writing difference image diff.tif"
+        diff = ImageBuf()
+        ImageBufAlgo.sub (diff, A, B)
+        ImageBufAlgo.abs (diff, diff)
+        image_write (diff, "diff.tif")
+\end{code}
+
+
+\subsubsection*{Changing the data format or bit depth}
+
+\begin{code}
+    img = ImageBuf ("input.exr")
+    # presume that it's a "half" OpenEXR file
+    # write it back out as a "float" file:
+    write_image (img, "output.exr", oiio.FLOAT)
+\end{code}
+
+
+\subsubsection*{Changing the compression}
+
+The following command converts writes a TIFF file, specifically using
+LZW compression:
+
+\begin{code}
+    img = ImageBuf ("in.tif")
+    img.specmod().attribute ("compression", "lzw")
+    write_image (img, "compressed.tif")
+\end{code}
+
+The following command writes its results as a JPEG file at a 
+compression quality of 50 (pretty severe compression):
+
+\begin{code}
+    img = ImageBuf ("big.jpg")
+    img.specmod().attribute ("quality", 50)
+    write_image (img, "small.jpg")
+\end{code}
+
+
+\subsubsection*{Converting between scanline and tiled images}
+
+\begin{code}
+    img = ImageBuf ("scan.tif")
+    img.set_write_tiles (16, 16)
+    write_image (img, "tile.tif")
+
+    img = ImageBuf ("tile.tif")
+    img.set_write_tiles (0, 0)
+    write_image (img, "scan.tif")
+\end{code}
+
+
+\subsubsection*{Adding captions or metadata}
+
+\begin{code}
+    img = ImageBuf ("foo.jpg")
+    # Add a caption:
+    img.specmod().attribute ("ImageDescription", "Hawaii vacation")
+    # Add keywords:
+    img.specmod().attribute ("keywords", "volcano,lava")
+    write_image (img, "foo.jpg")
+\end{code}
+
+
+\subsubsection*{Changing image boundaries}
+
+\noindent Change the origin of the pixel data window:
+\begin{code}
+    img = ImageBuf ("in.exr")
+    img.specmod().x = 256
+    img.specmod().y = 80
+    write_image (img, "offset.exr")
+\end{code}
+
+\noindent Change the display window:
+\begin{code}
+    img = ImageBuf ("in.exr")
+    img.set_full (16, 1040, 16, 784)
+    write_image (img, "out.exr")
+\end{code}
+
+\noindent Change the display window to match the data window:
+\begin{code}
+    img = ImageBuf ("in.exr")
+    img.set_full (img.roi())
+    write_image (img, "out.exr")
+\end{code}
+
+\noindent Cut (trim and extract) a 128x128 region whose upper left corner
+is at location (900,300), moving the result to the origin (0,0) of the image
+plane and setting the display window to the new pixel data window:
+\begin{code}
+    img = ImageBuf ("in.exr")
+    b = ImageBuf ()
+    ImageBufAlgo.cut (b, img, oiio.ROI(900,1028,300,428))
+    write_image (b, "out.exr")
+\end{code}
+
+
+\subsubsection*{Extract just the named channels from a complicted many-channel
+image, and add an alpha channel that is 1 everywhere}
+\begin{code}
+    img = ImageBuf ("allmyaovs.exr")
+    b = ImageBuf ()
+    ImageBufAlgo.channels (b, img, ("spec.R", "spec.G", "spec.B", 1.0))
+    write_image (b, "spec.tif")
+\end{code}
+
+
+\subsubsection*{Fade 30\% of the way between two images}
+
+\begin{code}
+    a = ImageBuf ()
+    ImageBufAlgo.mul (a, ImageBuf("A.exr"), 0.7)
+    b = ImageBuf ()
+    ImageBufAlgo.mul (b, ImageBuf("B.exr"), 0.3)
+    fade = ImageBuf ()
+    ImageBufAlgo.add (fade, a, b)
+    write_image (fade, "fade.exr")
+\end{code}
+
+
+\subsubsection*{Composite of small foreground over background, with offset}
+
+\begin{code}
+    fg = ImageBuf ("fg.exr")
+    fg.specmod().x = 512
+    fg.specmod().y = 89
+    bg = ImageBuf ("bg.exr")
+    comp = ImageBuf ()
+    ImageBufAlgo.over (comp, fg, bg)
+    write_image (fade, "composite.exr")
+\end{code}
+
+
 
 
 \index{Python|)}

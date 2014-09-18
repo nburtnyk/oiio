@@ -34,6 +34,7 @@
 #include <string>
 #include <algorithm>
 
+#include <boost/version.hpp>
 #include <boost/tokenizer.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/foreach.hpp>
@@ -44,10 +45,9 @@
 #include <shellapi.h>
 #endif
 
-#include "dassert.h"
-#include "ustring.h"
-
-#include "filesystem.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/ustring.h"
+#include "OpenImageIO/filesystem.h"
 
 
 OIIO_NAMESPACE_ENTER
@@ -285,8 +285,139 @@ Filesystem::is_regular (const std::string &path)
 
 
 
+bool
+Filesystem::create_directory (string_view path, std::string &err)
+{
+#if BOOST_FILESYSTEM_VERSION >= 3
+    boost::system::error_code ec;
+    bool ok = boost::filesystem::create_directory (path.str(), ec);
+    if (ok)
+        err.clear();
+    else
+        err = ec.message();
+    return ok;
+#else
+    bool ok = boost::filesystem::create_directory (path.str());
+    if (ok)
+        err.clear();
+    else
+        err = "Could not make directory";
+    return ok;
+#endif
+}
+
+
+bool
+Filesystem::copy (string_view from, string_view to, std::string &err)
+{
+#if BOOST_FILESYSTEM_VERSION >= 3
+    boost::system::error_code ec;
+# if BOOST_VERSION < 105000
+    boost::filesystem3::copy (from.str(), to.str(), ec);
+# else
+    boost::filesystem::copy (from.str(), to.str(), ec);
+# endif
+    if (ec) {
+        err.clear();
+        return true;
+    } else {
+        err = ec.message();
+        return false;
+    }
+#else
+    return false; // I'm too lazy to figure this out.
+#endif
+}
+
+
+
+bool
+Filesystem::remove (string_view path, std::string &err)
+{
+#if BOOST_FILESYSTEM_VERSION >= 3
+    boost::system::error_code ec;
+    bool ok = boost::filesystem::remove (path.str(), ec);
+    if (ok)
+        err.clear();
+    else
+        err = ec.message();
+    return ok;
+#else
+    bool ok = boost::filesystem::remove (path.str());
+    if (ok)
+        err.clear();
+    else
+        err = "Could not remove file";
+    return ok;
+#endif
+}
+
+
+
+unsigned long long
+Filesystem::remove_all (string_view path, std::string &err)
+{
+#if BOOST_FILESYSTEM_VERSION >= 3
+    boost::system::error_code ec;
+    unsigned long long n = boost::filesystem::remove_all (path.str(), ec);
+    if (!ec)
+        err.clear();
+    else
+        err = ec.message();
+    return n;
+#else
+    unsigned long long n = boost::filesystem::remove_all (path.str());
+    err.clear();
+    return n;
+#endif
+}
+
+
+
+std::string
+Filesystem::temp_directory_path()
+{
+#if BOOST_FILESYSTEM_VERSION >= 3
+    boost::system::error_code ec;
+    boost::filesystem::path p = boost::filesystem::temp_directory_path (ec);
+    return ec ? std::string() : p.string();
+#else
+    const char *tmpdir = getenv("TMPDIR");
+    if (! tmpdir)
+        tmpdir = getenv("TMP");
+    if (! tmpdir)
+        tmpdir = "/var/tmp";
+    if (exists (tmpdir))
+        return tmpdir;
+    // punt and hope for the best
+    return ".";
+#endif
+}
+
+
+
+std::string
+Filesystem::unique_path (string_view model)
+{
+#if BOOST_FILESYSTEM_VERSION >= 3
+    boost::system::error_code ec;
+    boost::filesystem::path p = boost::filesystem::unique_path (model.str(), ec);
+    return ec ? std::string() : p.string();
+#elif _MSC_VER
+    char buf[TMP_MAX];
+    char *result = tmpnam (buf);
+    return result ? std::string(result) : std::string();
+#else
+    char buf[L_tmpnam];
+    char *result = tmpnam (buf);
+    return result ? std::string(result) : std::string();
+#endif
+}
+
+
+
 FILE*
-Filesystem::fopen (const std::string &path, const std::string &mode)
+Filesystem::fopen (string_view path, string_view mode)
 {
 #ifdef _WIN32
     // on Windows fopen does not accept UTF-8 paths, so we convert to wide char
@@ -303,8 +434,7 @@ Filesystem::fopen (const std::string &path, const std::string &mode)
 
 
 void
-Filesystem::open (std::ifstream &stream,
-                  const std::string &path,
+Filesystem::open (std::ifstream &stream, string_view path,
                   std::ios_base::openmode mode)
 {
 #ifdef _WIN32
@@ -320,8 +450,7 @@ Filesystem::open (std::ifstream &stream,
 
 
 void
-Filesystem::open (std::ofstream &stream,
-                  const std::string &path,
+Filesystem::open (std::ofstream &stream, string_view path,
                   std::ios_base::openmode mode)
 {
 #ifdef _WIN32
@@ -332,6 +461,8 @@ Filesystem::open (std::ofstream &stream,
     stream.open (path.c_str(), mode);
 #endif
 }
+
+
 
 std::time_t
 Filesystem::last_write_time (const std::string& path)
@@ -393,27 +524,27 @@ Filesystem::convert_native_arguments (int argc, const char *argv[])
 
 
 bool
-Filesystem::enumerate_sequence (const char *desc, std::vector<int> &numbers)
+Filesystem::enumerate_sequence (string_view desc, std::vector<int> &numbers)
 {
     numbers.clear ();
 
     // Split the sequence description into comma-separated subranges.
-    std::vector<std::string> ranges;
+    std::vector<string_view> ranges;
     Strutil::split (desc, ranges, ",");
 
     // For each subrange...
-    BOOST_FOREACH (const std::string &s, ranges) {
+    BOOST_FOREACH (string_view s, ranges) {
         // It's START, START-FINISH, or START-FINISHxSTEP, or START-FINISHySTEP
         // If START>FINISH or if STEP<0, then count down.
         // If 'y' is used, generate the complement.
         std::vector<std::string> range;
         Strutil::split (s, range, "-", 2);
-        int first = strtol (range[0].c_str(), NULL, 10);
+        int first = Strutil::from_string<int> (range[0]);
         int last = first;
         int step = 1;
         bool complement = false;
         if (range.size() > 1) {
-            last = strtol (range[1].c_str(), NULL, 10);
+            last = Strutil::from_string<int> (range[1]);
             if (const char *x = strchr (range[1].c_str(), 'x'))
                 step = (int) strtol (x+1, NULL, 10);
             else if (const char *x = strchr (range[1].c_str(), 'y')) {
@@ -437,6 +568,8 @@ Filesystem::enumerate_sequence (const char *desc, std::vector<int> &numbers)
     return true;
 }
 
+
+
 bool
 Filesystem::parse_pattern (const char *pattern_,
                            int framepadding_override,
@@ -456,6 +589,12 @@ Filesystem::parse_pattern (const char *pattern_,
     boost::match_results<std::string::const_iterator> range_match;
     if (! boost::regex_search (pattern, range_match, sequence_re)) {
         // Not a range
+        static boost::regex all_views_re ("%[Vv]");
+        if (boost::regex_search (pattern, all_views_re)) {
+            normalized_pattern = pattern;
+            return true;
+        }
+
         return false;
     }
 
@@ -512,6 +651,105 @@ Filesystem::enumerate_file_sequence (const std::string &pattern,
 
 
 bool
+Filesystem::enumerate_file_sequence (const std::string &pattern,
+                                     const std::vector<int> &numbers,
+                                     const std::vector<string_view> &views,
+                                     std::vector<std::string> &filenames)
+{
+    DASSERT (views.size() == 0 || views.size() == numbers.size());
+
+    static boost::regex view_re ("%V"), short_view_re ("%v");
+
+    for (size_t i = 0, e = numbers.size(); i < e; ++i) {
+        std::string f = pattern;
+        if (views.size() > 0 && ! views[i].empty()) {
+            f = boost::regex_replace (f, view_re, views[i]);
+            f = boost::regex_replace (f, short_view_re, views[i].substr(0, 1));
+        }
+        f = Strutil::format (f.c_str(), numbers[i]);
+        filenames.push_back (f);
+    }
+
+    return true;
+}
+
+
+
+bool
+Filesystem::scan_for_matching_filenames(const std::string &pattern,
+                                        const std::vector<string_view> &views,
+                                        std::vector<int> &frame_numbers,
+                                        std::vector<string_view> &frame_views,
+                                        std::vector<std::string> &filenames)
+{
+    static boost::regex format_re ("%0([0-9]+)d");
+    static boost::regex all_views_re ("%[Vv]"), view_re ("%V"), short_view_re ("%v");
+
+    if (boost::regex_search (pattern, all_views_re)) {
+        if (boost::regex_search (pattern, format_re)) {
+            // case 1: pattern has format and view
+            std::vector< std::pair< std::pair< int, string_view>, std::string> > matches;
+            for (int i = 0, e = views.size(); i < e; ++i) {
+                if (views[i].empty())
+                    continue;
+
+                const string_view short_view = views[i].substr (0, 1);
+                std::vector<int> view_numbers;
+                std::vector<std::string> view_filenames;
+
+                std::string view_pattern = pattern;
+                view_pattern = boost::regex_replace (view_pattern, view_re, views[i]);
+                view_pattern = boost::regex_replace (view_pattern, short_view_re, short_view);
+
+                if (! scan_for_matching_filenames (view_pattern, view_numbers, view_filenames))
+                    continue;
+
+                for (int j = 0, f = view_numbers.size(); j < f; ++j) {
+                    matches.push_back (std::make_pair (std::make_pair (view_numbers[j], views[i]), view_filenames[j]));
+                }
+            }
+
+            std::sort (matches.begin(), matches.end());
+
+            for (int i = 0, e = matches.size(); i < e; ++i) {
+                frame_numbers.push_back (matches[i].first.first);
+                frame_views.push_back (matches[i].first.second);
+                filenames.push_back (matches[i].second);
+            }
+
+        } else {
+            // case 2: pattern has view, but no format
+            std::vector< std::pair<string_view, std::string> > matches;
+            for (int i = 0, e = views.size(); i < e; ++i) {
+                const string_view &view = views[i];
+                const string_view short_view = view.substr (0, 1);
+
+                std::string view_pattern = pattern;
+                view_pattern = boost::regex_replace (view_pattern, view_re, view);
+                view_pattern = boost::regex_replace (view_pattern, short_view_re, short_view);
+
+                if (exists (view_pattern))
+                    matches.push_back (std::make_pair (view, view_pattern));
+            }
+
+            std::sort (matches.begin(), matches.end());
+            for (int i = 0, e = matches.size(); i < e; ++i) {
+                frame_views.push_back (matches[i].first);
+                filenames.push_back (matches[i].second);
+            }
+
+        }
+        return true;
+
+    } else {
+        // case 3: pattern has format, but no view
+        return scan_for_matching_filenames(pattern, frame_numbers, filenames);
+    }
+
+    return true;
+}
+
+bool
 Filesystem::scan_for_matching_filenames(const std::string &pattern_,
                                         std::vector<int> &numbers,
                                         std::vector<std::string> &filenames)
@@ -529,11 +767,11 @@ Filesystem::scan_for_matching_filenames(const std::string &pattern_,
 #endif
     }
 
-    if (! boost::filesystem::exists(directory))
+    if (! exists(directory))
         return false;
 
     // build a regex that matches the pattern
-    boost::regex format_re ("%0([0-9]+)d");
+    static boost::regex format_re ("%0([0-9]+)d");
     boost::match_results<std::string::const_iterator> format_match;
     if (! boost::regex_search (pattern, format_match, format_re))
         return false;
@@ -543,9 +781,13 @@ Filesystem::scan_for_matching_filenames(const std::string &pattern_,
     std::string suffix (format_match.suffix().first, format_match.suffix().second);
 
     std::string pattern_re_str = prefix + "([0-9]{" + thepadding + "})" + suffix;
-    boost::regex pattern_re (pattern_re_str);
-
     std::vector< std::pair< int, std::string > > matches;
+
+    // There are some corner cases regex that could be constructed here that
+    // are badly structured and might throw an exception.
+    try {
+
+    boost::regex pattern_re (pattern_re_str);
 
     boost::filesystem::directory_iterator end_it;
 #ifdef _WIN32
@@ -559,18 +801,21 @@ Filesystem::scan_for_matching_filenames(const std::string &pattern_,
             boost::match_results<std::string::const_iterator> frame_match;
             if (boost::regex_match (f, frame_match, pattern_re)) {
                 std::string thenumber (frame_match[1].first, frame_match[1].second);
-
                 int frame = (int)strtol (thenumber.c_str(), NULL, 10);
-
                 matches.push_back (std::make_pair (frame, f));
             }
         }
     }
 
+    } catch (std::exception &e) {
+        // Botched regex. Just fail.
+        return false;
+    }
+
     // filesystem order is undefined, so return sorted sequences
     std::sort (matches.begin(), matches.end());
 
-    for (size_t i = 0; i < matches.size(); ++i) {
+    for (size_t i = 0, e = matches.size(); i < e; ++i) {
         numbers.push_back (matches[i].first);
         filenames.push_back (matches[i].second);
     }

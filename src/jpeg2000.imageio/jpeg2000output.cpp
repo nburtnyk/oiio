@@ -29,9 +29,9 @@
 */
 #include <vector>
 #include "openjpeg.h"
-#include "filesystem.h"
-#include "fmath.h"
-#include "imageio.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/fmath.h"
+#include "OpenImageIO/imageio.h"
 
 OIIO_PLUGIN_NAMESPACE_BEGIN
 
@@ -49,11 +49,16 @@ class Jpeg2000Output : public ImageOutput {
     virtual bool close ();
     virtual bool write_scanline (int y, int z, TypeDesc format,
                                  const void *data, stride_t xstride);
+    virtual bool write_tile (int x, int y, int z, TypeDesc format,
+                             const void *data, stride_t xstride,
+                             stride_t ystride, stride_t zstride);
  private:
     std::string m_filename;
     FILE *m_file;
     opj_cparameters_t m_compression_parameters;
     opj_image_t *m_image;
+    unsigned int m_dither;
+    std::vector<unsigned char> m_tilebuffer;
 
     void init (void)
     {
@@ -111,11 +116,19 @@ Jpeg2000Output::open (const std::string &name, const ImageSpec &spec,
     if (m_spec.format != TypeDesc::UINT8 && m_spec.format != TypeDesc::UINT16)
         m_spec.set_format (TypeDesc::UINT8);
 
+    m_dither = (m_spec.format == TypeDesc::UINT8) ?
+                    m_spec.get_int_attribute ("oiio:dither", 0) : 0;
+
     m_file = Filesystem::fopen (m_filename, "wb");
     if (m_file == NULL) {
         error ("Unable to open file \"%s\"", m_filename.c_str());
         return false;
     }
+
+    // If user asked for tiles -- which this format doesn't support, emulate
+    // it by buffering the whole image.
+    if (m_spec.tile_width && m_spec.tile_height)
+        m_tilebuffer.resize (m_spec.image_bytes());
 
     m_image = create_jpeg2000_image();
     return true;
@@ -134,7 +147,8 @@ Jpeg2000Output::write_scanline (int y, int z, TypeDesc format,
     }
 
     std::vector<uint8_t> scratch;
-    data = to_native_scanline (format, data, xstride, scratch);
+    data = to_native_scanline (format, data, xstride, scratch,
+                               m_dither, y, z);
     if (m_spec.format == TypeDesc::UINT8)
         write_scanline<uint8_t>(y, z, data);
     else
@@ -147,18 +161,43 @@ Jpeg2000Output::write_scanline (int y, int z, TypeDesc format,
 }
 
 
+
+bool
+Jpeg2000Output::write_tile (int x, int y, int z, TypeDesc format,
+                       const void *data, stride_t xstride,
+                       stride_t ystride, stride_t zstride)
+{
+    // Emulate tiles by buffering the whole image
+    return copy_tile_to_image_buffer (x, y, z, format, data, xstride,
+                                      ystride, zstride, &m_tilebuffer[0]);
+}
+
+
+
 bool
 Jpeg2000Output::close ()
 {
-    if (m_file) {
-        fclose(m_file);
-        m_file = NULL;
+    if (! m_file) {         // Already closed
+        return true;
+        init();
     }
+
+    bool ok = true;
+    if (m_spec.tile_width) {
+        // We've been emulating tiles; now dump as scanlines.
+        ASSERT (m_tilebuffer.size());
+        ok &= write_scanlines (m_spec.y, m_spec.y+m_spec.height, 0,
+                               m_spec.format, &m_tilebuffer[0]);
+        std::vector<unsigned char>().swap (m_tilebuffer);
+    }
+
+    fclose(m_file);
+    m_file = NULL;
     if (m_image) {
         opj_image_destroy(m_image);
         m_image = NULL;
     }
-    return true;
+    return ok;
 }
 
 

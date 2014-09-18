@@ -36,7 +36,7 @@
 #ifndef OPENIMAGEIO_TEXTURE_PVT_H
 #define OPENIMAGEIO_TEXTURE_PVT_H
 
-#include "version.h"
+#include "OpenImageIO/texture.h"
 
 
 OIIO_NAMESPACE_ENTER
@@ -67,43 +67,40 @@ public:
     TextureSystemImpl (ImageCache *imagecache);
     virtual ~TextureSystemImpl ();
 
-    virtual bool attribute (const std::string &name, TypeDesc type, const void *val);
-    virtual bool attribute (const std::string &name, int val) {
+    virtual bool attribute (string_view name, TypeDesc type, const void *val);
+    virtual bool attribute (string_view name, int val) {
         return attribute (name, TypeDesc::INT, &val);
     }
-    virtual bool attribute (const std::string &name, float val) {
+    virtual bool attribute (string_view name, float val) {
         return attribute (name, TypeDesc::FLOAT, &val);
     }
-    virtual bool attribute (const std::string &name, double val) {
+    virtual bool attribute (string_view name, double val) {
         float f = (float) val;
         return attribute (name, TypeDesc::FLOAT, &f);
     }
-    virtual bool attribute (const std::string &name, const char *val) {
-        return attribute (name, TypeDesc::STRING, &val);
-    }
-    virtual bool attribute (const std::string &name, const std::string &val) {
+    virtual bool attribute (string_view name, string_view val) {
         const char *s = val.c_str();
         return attribute (name, TypeDesc::STRING, &s);
     }
 
-    virtual bool getattribute (const std::string &name, TypeDesc type, void *val);
-    virtual bool getattribute (const std::string &name, int &val) {
+    virtual bool getattribute (string_view name, TypeDesc type, void *val);
+    virtual bool getattribute (string_view name, int &val) {
         return getattribute (name, TypeDesc::INT, &val);
     }
-    virtual bool getattribute (const std::string &name, float &val) {
+    virtual bool getattribute (string_view name, float &val) {
         return getattribute (name, TypeDesc::FLOAT, &val);
     }
-    virtual bool getattribute (const std::string &name, double &val) {
+    virtual bool getattribute (string_view name, double &val) {
         float f;
         bool ok = getattribute (name, TypeDesc::FLOAT, &f);
         if (ok)
             val = f;
         return ok;
     }
-    virtual bool getattribute (const std::string &name, char **val) {
+    virtual bool getattribute (string_view name, char **val) {
         return getattribute (name, TypeDesc::STRING, val);
     }
-    virtual bool getattribute (const std::string &name, std::string &val) {
+    virtual bool getattribute (string_view name, std::string &val) {
         const char *s;
         bool ok = getattribute (name, TypeDesc::STRING, &s);
         if (ok)
@@ -112,8 +109,6 @@ public:
     }
 
 
-    /// Close everything, free resources, start from scratch.
-    ///
     virtual void clear () { }
 
     // Retrieve options
@@ -132,115 +127,128 @@ public:
         return (TextureHandle *) find_texturefile (filename, thread_info);
     }
 
-    /// Filtered 2D texture lookup for a single point, no runflags.
-    ///
-    virtual bool texture (TextureHandle *texture_handle, Perthread *thread_info,
-                          TextureOpt &options,
-                          float s, float t,
-                          float dsdx, float dtdx, float dsdy, float dtdy,
-                          float *result);
-
-
-    /// Filtered 2D texture lookup for a single point, no runflags.
-    ///
     virtual bool texture (ustring filename, TextureOpt &options,
-                          float s, float t,
-                          float dsdx, float dtdx, float dsdy, float dtdy,
-                          float *result);
-
-    /// Filtered 2D texture lookup for a single point, no runflags.
-    ///
-    virtual bool texture (ustring filename, TextureOptions &options,
-                  float s, float t,
-                  float dsdx, float dtdx, float dsdy, float dtdy,
-                  float *result) {
-        Runflag rf = RunFlagOn;
-        return texture (filename, options, &rf, 0, 1, s, t,
-                        dsdx, dtdx, dsdy, dtdy, result);
-    }
-
-    /// Retrieve a 2D texture lookup at many points at once.
-    ///
+                          float s, float t, float dsdx, float dtdx,
+                          float dsdy, float dtdy,
+                          int nchannels, float *result,
+                          float *dresultds=NULL, float *dresultdt=NULL);
+    virtual bool texture (TextureHandle *texture_handle,
+                          Perthread *thread_info, TextureOpt &options,
+                          float s, float t, float dsdx, float dtdx,
+                          float dsdy, float dtdy,
+                          int nchannels, float *result,
+                          float *dresultds=NULL, float *dresultdt=NULL);
     virtual bool texture (ustring filename, TextureOptions &options,
                           Runflag *runflags, int beginactive, int endactive,
                           VaryingRef<float> s, VaryingRef<float> t,
                           VaryingRef<float> dsdx, VaryingRef<float> dtdx,
                           VaryingRef<float> dsdy, VaryingRef<float> dtdy,
-                          float *result);
+                          int nchannels, float *result,
+                          float *dresultds=NULL, float *dresultdt=NULL);
+    virtual bool texture (TextureHandle *texture_handle,
+                          Perthread *thread_info, TextureOptions &options,
+                          Runflag *runflags, int beginactive, int endactive,
+                          VaryingRef<float> s, VaryingRef<float> t,
+                          VaryingRef<float> dsdx, VaryingRef<float> dtdx,
+                          VaryingRef<float> dsdy, VaryingRef<float> dtdy,
+                          int nchannels, float *result,
+                          float *dresultds=NULL, float *dresultdt=NULL);
 
-    /// Retrieve a 3D texture lookup at a single point.
-    ///
+
     virtual bool texture3d (ustring filename, TextureOpt &options,
                             const Imath::V3f &P, const Imath::V3f &dPdx,
                             const Imath::V3f &dPdy, const Imath::V3f &dPdz,
-                            float *result);
-
+                            int nchannels, float *result,
+                            float *dresultds=NULL, float *dresultdt=NULL,
+                            float *dresultdr=NULL);
     virtual bool texture3d (TextureHandle *texture_handle,
                             Perthread *thread_info, TextureOpt &options,
                             const Imath::V3f &P, const Imath::V3f &dPdx,
                             const Imath::V3f &dPdy, const Imath::V3f &dPdz,
-                            float *result);
-
+                            int nchannels, float *result,
+                            float *dresultds=NULL, float *dresultdt=NULL,
+                            float *dresultdr=NULL);
     virtual bool texture3d (ustring filename, TextureOptions &options,
                             Runflag *runflags, int beginactive, int endactive,
                             VaryingRef<Imath::V3f> P,
                             VaryingRef<Imath::V3f> dPdx,
                             VaryingRef<Imath::V3f> dPdy,
                             VaryingRef<Imath::V3f> dPdz,
-                            float *result);
+                            int nchannels, float *result,
+                            float *dresultds=NULL, float *dresultdt=NULL,
+                            float *dresultdr=NULL);
+    virtual bool texture3d (TextureHandle *texture_handle,
+                            Perthread *thread_info, TextureOptions &options,
+                            Runflag *runflags, int beginactive, int endactive,
+                            VaryingRef<Imath::V3f> P,
+                            VaryingRef<Imath::V3f> dPdx,
+                            VaryingRef<Imath::V3f> dPdy,
+                            VaryingRef<Imath::V3f> dPdz,
+                            int nchannels, float *result,
+                            float *dresultds=NULL, float *dresultdt=NULL,
+                            float *dresultdr=NULL);
 
-    /// Retrieve a shadow lookup for a single position P.
-    ///
     virtual bool shadow (ustring filename, TextureOpt &options,
                          const Imath::V3f &P, const Imath::V3f &dPdx,
-                         const Imath::V3f &dPdy, float *result) {
+                         const Imath::V3f &dPdy, float *result,
+                         float *dresultds=NULL, float *dresultdt=NULL) {
         return false;
     }
-
     virtual bool shadow (TextureHandle *texture_handle, Perthread *thread_info,
                          TextureOpt &options,
                          const Imath::V3f &P, const Imath::V3f &dPdx,
-                         const Imath::V3f &dPdy, float *result) {
+                         const Imath::V3f &dPdy, float *result,
+                         float *dresultds=NULL, float *dresultdt=NULL) {
         return false;
     }
-
-    /// Retrieve a shadow lookup for position P at many points at once.
-    ///
     virtual bool shadow (ustring filename, TextureOptions &options,
                          Runflag *runflags, int beginactive, int endactive,
                          VaryingRef<Imath::V3f> P,
                          VaryingRef<Imath::V3f> dPdx,
                          VaryingRef<Imath::V3f> dPdy,
-                         float *result) {
+                         float *result,
+                         float *dresultds=NULL, float *dresultdt=NULL) {
+        return false;
+    }
+    virtual bool shadow (TextureHandle *texture_handle, Perthread *thread_info,
+                         TextureOptions &options,
+                         Runflag *runflags, int beginactive, int endactive,
+                         VaryingRef<Imath::V3f> P,
+                         VaryingRef<Imath::V3f> dPdx,
+                         VaryingRef<Imath::V3f> dPdy,
+                         float *result,
+                         float *dresultds=NULL, float *dresultdt=NULL) {
         return false;
     }
 
-    /// Retrieve an environment map lookup for direction R.
-    ///
-    virtual bool environment (ustring filename, TextureOpt &opt,
-                              const Imath::V3f &R, const Imath::V3f &dRdx,
-                              const Imath::V3f &dRdy, float *result);
 
+    virtual bool environment (ustring filename, TextureOpt &options,
+                              const Imath::V3f &R, const Imath::V3f &dRdx,
+                              const Imath::V3f &dRdy, int nchannels, float *result,
+                              float *dresultds=NULL, float *dresultdt=NULL);
     virtual bool environment (TextureHandle *texture_handle,
                               Perthread *thread_info, TextureOpt &options,
                               const Imath::V3f &R, const Imath::V3f &dRdx,
-                              const Imath::V3f &dRdy, float *result);
-
-    /// Retrieve an environment map lookup for direction R, for many
-    /// points at once.
+                              const Imath::V3f &dRdy, int nchannels, float *result,
+                              float *dresultds=NULL, float *dresultdt=NULL);
     virtual bool environment (ustring filename, TextureOptions &options,
                               Runflag *runflags, int beginactive, int endactive,
                               VaryingRef<Imath::V3f> R,
                               VaryingRef<Imath::V3f> dRdx,
                               VaryingRef<Imath::V3f> dRdy,
-                              float *result);
+                              int nchannels, float *result,
+                              float *dresultds=NULL, float *dresultdt=NULL);
+    virtual bool environment (TextureHandle *texture_handle,
+                              Perthread *thread_info, TextureOptions &options,
+                              Runflag *runflags, int beginactive, int endactive,
+                              VaryingRef<Imath::V3f> R,
+                              VaryingRef<Imath::V3f> dRdx,
+                              VaryingRef<Imath::V3f> dRdy,
+                              int nchannels, float *result,
+                              float *dresultds=NULL, float *dresultdt=NULL);
 
-    /// Given possibly-relative 'filename', resolve it using the search
-    /// path rules and return the full resolved filename.
     virtual std::string resolve_filename (const std::string &filename) const;
 
-    /// Get information about the given texture.
-    ///
     virtual bool get_texture_info (ustring filename, int subimage,
                            ustring dataname, TypeDesc datatype, void *data);
 
@@ -249,11 +257,10 @@ public:
 
     virtual const ImageSpec *imagespec (ustring filename, int subimage=0);
 
-    /// Retrieve a rectangle of raw unfiltered texels.
-    ///
     virtual bool get_texels (ustring filename, TextureOpt &options,
                              int miplevel, int xbegin, int xend,
                              int ybegin, int yend, int zbegin, int zend,
+                             int chbegin, int chend,
                              TypeDesc format, void *result);
 
     virtual std::string geterror () const;
@@ -264,6 +271,8 @@ public:
     virtual void invalidate_all (bool force=false);
 
     void operator delete (void *todel) { ::delete ((char *)todel); }
+
+    typedef bool (*wrap_impl) (int &coord, int origin, int width);
 
 private:
     typedef ImageCacheTileRef TileRef;
@@ -294,44 +303,59 @@ private:
 
     // Define a prototype of a member function pointer for texture
     // lookups.
+    // If simd is nonzero, it's guaranteed that all float* inputs and
+    // outputs are padded to length 'simd' and aligned to a simd*4-byte
+    // boundary (for example, 4 for SSE). This means that the functions can
+    // behave AS IF the number of channels being retrieved is simd, and any
+    // extra values returned will be discarded by the caller.
     typedef bool (TextureSystemImpl::*texture_lookup_prototype)
             (TextureFile &texfile, PerThreadInfo *thread_info,
              TextureOpt &options,
+             int nchannels_result, int actualchannels,
              float _s, float _t,
              float _dsdx, float _dtdx,
              float _dsdy, float _dtdy,
-             float *result);
+             float *result, float *dresultds, float *resultdt);
 
     /// Look up texture from just ONE point
     ///
     bool texture_lookup (TextureFile &texfile, PerThreadInfo *thread_info, 
                          TextureOpt &options,
+                         int nchannels_result, int actualchannels,
                          float _s, float _t,
                          float _dsdx, float _dtdx,
                          float _dsdy, float _dtdy,
-                         float *result);
+                         float *result, float *dresultds, float *resultdt);
     
     bool texture_lookup_nomip (TextureFile &texfile, 
                          PerThreadInfo *thread_info, 
                          TextureOpt &options,
+                         int nchannels_result, int actualchannels,
                          float _s, float _t,
                          float _dsdx, float _dtdx,
                          float _dsdy, float _dtdy,
-                         float *result);
+                         float *result, float *dresultds, float *resultdt);
     
     bool texture_lookup_trilinear_mipmap (TextureFile &texfile,
                          PerThreadInfo *thread_info, 
                          TextureOpt &options,
+                         int nchannels_result, int actualchannels,
                          float _s, float _t,
                          float _dsdx, float _dtdx,
                          float _dsdy, float _dtdy,
-                         float *result);
+                         float *result, float *dresultds, float *resultdt);
     
+    // If simd is nonzero, it's guaranteed that all float* inputs and
+    // outputs are padded to length 'simd' and aligned to a simd*4-byte
+    // boundary (for example, 4 for SSE). This means that the functions can
+    // behave AS IF the number of channels being retrieved is simd, and any
+    // extra values returned will be discarded by the caller.
     typedef bool (TextureSystemImpl::*accum_prototype)
                               (float s, float t, int level,
                                TextureFile &texturefile,
                                PerThreadInfo *thread_info,
                                TextureOpt &options,
+                               int nchannels_result, int actualchannels,
                                float weight, float *accum,
                                float *daccumds, float *daccumdt);
 
@@ -339,6 +363,7 @@ private:
                                TextureFile &texturefile,
                                PerThreadInfo *thread_info,
                                TextureOpt &options,
+                               int nchannels_result, int actualchannels,
                                float weight, float *accum,
                                float *daccumds, float *daccumdt);
 
@@ -346,6 +371,7 @@ private:
                                 TextureFile &texturefile,
                                 PerThreadInfo *thread_info,
                                 TextureOpt &options,
+                               int nchannels_result, int actualchannels,
                                 float weight, float *accum,
                                 float *daccumds, float *daccumdt);
 
@@ -353,6 +379,7 @@ private:
                                TextureFile &texturefile,
                                PerThreadInfo *thread_info,
                                TextureOpt &options,
+                               int nchannels_result, int actualchannels,
                                float weight, float *accum,
                                float *daccumds, float *daccumdt);
 
@@ -361,27 +388,37 @@ private:
     typedef bool (TextureSystemImpl::*texture3d_lookup_prototype)
             (TextureFile &texfile, PerThreadInfo *thread_info,
              TextureOpt &options,
-             const Imath::V3f &_P, const Imath::V3f &_dPdx,
-             const Imath::V3f &_dPdy, const Imath::V3f &_dPdz,
-             float *result);
+             int nchannels_result, int actualchannels,
+             const Imath::V3f &P, const Imath::V3f &dPdx,
+             const Imath::V3f &dPdy, const Imath::V3f &dPdz,
+             float *result, float *dresultds,
+             float *dresultdt, float *dresultdr);
     bool texture3d_lookup_nomip (TextureFile &texfile,
                                  PerThreadInfo *thread_info, 
                                  TextureOpt &options,
-                                 const Imath::V3f &_P, const Imath::V3f &_dPdx,
-                                 const Imath::V3f &_dPdy, const Imath::V3f &_dPdz,
-                                 float *result);
+                                 int nchannels_result, int actualchannels,
+                                 const Imath::V3f &P, const Imath::V3f &dPdx,
+                                 const Imath::V3f &dPdy, const Imath::V3f &dPdz,
+                                 float *result, float *dresultds,
+                                 float *dresultdt, float *dresultdr);
     typedef bool (TextureSystemImpl::*accum3d_prototype)
                         (const Imath::V3f &P, int level,
                          TextureFile &texturefile, PerThreadInfo *thread_info,
-                         TextureOpt &options, float weight, float *accum,
+                         TextureOpt &options,
+                         int nchannels_result, int actualchannels,
+                         float weight, float *accum,
                          float *daccumds, float *daccumdt, float *daccumdr);
     bool accum3d_sample_closest (const Imath::V3f &P, int level,
                 TextureFile &texturefile, PerThreadInfo *thread_info,
-                TextureOpt &options, float weight, float *accum,
+                TextureOpt &options,
+                int nchannels_result, int actualchannels,
+                float weight, float *accum,
                 float *daccumds, float *daccumdt, float *daccumdr);
     bool accum3d_sample_bilinear (const Imath::V3f &P, int level,
                 TextureFile &texturefile, PerThreadInfo *thread_info,
-                TextureOpt &options, float weight, float *accum,
+                TextureOpt &options,
+                int nchannels_result, int actualchannels,
+                float weight, float *accum,
                 float *daccumds, float *daccumdt, float *daccumdr);
 
     /// Helper function to calculate the anisotropic aspect ratio from
@@ -404,10 +441,14 @@ private:
 
     /// Called when the requested texture is missing, fills in the
     /// results.
-    bool missing_texture (TextureOpt &options, float *result);
+    bool missing_texture (TextureOpt &options, int nchannels, float *result,
+                          float *dresultds, float *dresultdt,
+                          float *dresultdr=NULL);
 
     /// Handle gray-to-RGB promotion.
-    void fill_gray_channels (const ImageSpec &spec, TextureOpt &options, float *result);
+    void fill_gray_channels (const ImageSpec &spec, int nchannels,
+                             float *result, float *dresultds, float *dresultdt,
+                             float *dresultdr=NULL);
 
     static bool wrap_periodic_sharedborder (int &coord, int origin, int width);
     static const wrap_impl wrap_functions[];

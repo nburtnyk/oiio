@@ -39,15 +39,16 @@
 #include <boost/foreach.hpp>
 #include <boost/regex.hpp>
 #include <OpenEXR/half.h>
+#include <OpenEXR/ImathVec.h>
 
-#include "argparse.h"
-#include "strutil.h"
-#include "imageio.h"
-#include "imagebuf.h"
-#include "imagebufalgo.h"
-#include "hash.h"
+#include "OpenImageIO/argparse.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/imagebufalgo.h"
+#include "OpenImageIO/hash.h"
+#include "OpenImageIO/fmath.h"
 #include "oiiotool.h"
-#include "fmath.h"
 
 OIIO_NAMESPACE_USING;
 using namespace OiioTool;
@@ -79,12 +80,12 @@ print_sha1 (ImageInput *input)
             return;
         }
         else if (size != 0) {
-            std::vector<unsigned char> buf((size_t)size);
+            boost::scoped_array<char> buf (new char [size]);
             if (! input->read_image (TypeDesc::UNKNOWN /*native*/, &buf[0])) {
                 printf ("    SHA-1: unable to compute, could not read image\n");
                 return;
             }
-            sha.appendvec (buf);
+            sha.append (&buf[0], size);
         }
     }
 
@@ -94,7 +95,7 @@ print_sha1 (ImageInput *input)
 
 
 static void
-dump_data (ImageInput *input)
+dump_data (ImageInput *input, const print_info_options &opt)
 {
     const ImageSpec &spec (input->spec());
     if (spec.deep) {
@@ -105,11 +106,12 @@ dump_data (ImageInput *input)
             return;
         }
         int nc = spec.nchannels;
-        TypeDesc *types = &dd.channeltypes[0];
         for (int z = 0, pixel = 0;  z < spec.depth;  ++z) {
             for (int y = 0;  y < spec.height;  ++y) {
                 for (int x = 0;  x < spec.width;  ++x, ++pixel) {
                     int nsamples = dd.nsamples[pixel];
+                    if (nsamples == 0 && ! opt.dumpdata_showempty)
+                        continue;
                     std::cout << "    Pixel (";
                     if (spec.depth > 1 || spec.z != 0)
                         std::cout << Strutil::format("%d, %d, %d",
@@ -122,19 +124,9 @@ dump_data (ImageInput *input)
                     for (int s = 0;  s < nsamples;  ++s) {
                         if (s)
                             std::cout << " / ";
-                        for (int c = 0;  c < nc;  ++c) {
-                            std::cout << " " << spec.channelnames[c] << "=";
-                            const char *ptr = (const char *)dd.pointers[pixel*nc+c];
-                            TypeDesc t = types[c];
-                            ptr += s * t.size();
-                            if (t.basetype == TypeDesc::FLOAT) {
-                                std::cout << *(const float *)ptr;
-                            } else if (t.basetype == TypeDesc::HALF) {
-                                std::cout << *(const half *)ptr;
-                            } else if (t.basetype == TypeDesc::UINT) {
-                                std::cout << *(const unsigned int *)ptr;
-                            }
-                        }
+                        for (int c = 0;  c < nc;  ++c)
+                            std::cout << " " << spec.channelnames[c] << "="
+                                      << dd.deep_value (pixel, c, s);
                     }
                     std::cout << "\n";
                 }
@@ -183,8 +175,6 @@ read_input (const std::string &filename, ImageBuf &img,
         img.read (subimage, miplevel, false, TypeDesc::FLOAT))
         return true;
 
-    std::cerr << "oiiotool ERROR: Could not read " << filename << ":\n\t"
-              << img.geterror() << "\n";
     return false;
 }
 
@@ -254,7 +244,8 @@ print_stats_footer (unsigned int maxval)
 
 
 static void
-print_stats (const std::string &filename,
+print_stats (Oiiotool &ot,
+             const std::string &filename,
              const ImageSpec &originalspec,
              int subimage=0, int miplevel=0, bool indentmip=false)
 {
@@ -262,13 +253,13 @@ print_stats (const std::string &filename,
     ImageBuf input;
     
     if (! read_input (filename, input, subimage, miplevel)) {
-        std::cerr << "Stats: read error: " << input.geterror() << "\n";
+        ot.error ("stats", input.geterror());
         return;
     }
     
     PixelStats stats;
     if (! computePixelStats (stats, input)) {
-        printf ("%sStats: (unable to compute)\n", indent);
+        ot.error ("stats", "unable to compute");
         return;
     }
     
@@ -331,22 +322,68 @@ print_stats (const std::string &filename,
         size_t npixels = dd->nsamples.size();
         size_t totalsamples = 0, emptypixels = 0;
         size_t maxsamples = 0, minsamples = std::numeric_limits<size_t>::max();
-        for (size_t p = 0;  p < npixels;  ++p) {
-            size_t c = size_t(dd->nsamples[p]);
-            totalsamples += c;
-            if (c > maxsamples)
-                maxsamples = c;
-            if (c < minsamples)
-                minsamples = c;
-            if (c == 0)
-                ++emptypixels;
+        size_t maxsamples_npixels = 0;
+        float mindepth = std::numeric_limits<float>::max();
+        float maxdepth = -std::numeric_limits<float>::max();
+        Imath::V3i maxsamples_pixel(-1,-1,-1), minsamples_pixel(-1,-1,-1);
+        Imath::V3i mindepth_pixel(-1,-1,-1), maxdepth_pixel(-1,-1,-1);
+        size_t sampoffset = 0;
+        int depthchannel = -1;
+        for (int c = 0; c < input.nchannels(); ++c)
+            if (Strutil::iequals (originalspec.channelnames[c], "Z"))
+                depthchannel = c;
+        int xend = originalspec.x + originalspec.width;
+        int yend = originalspec.y + originalspec.height;
+        int zend = originalspec.z + originalspec.depth;
+        size_t p = 0;
+        for (int z = originalspec.z; z < zend; ++z) {
+            for (int y = originalspec.y; y < yend; ++y) {
+                for (int x = originalspec.x; x < xend; ++x, ++p) {
+                    size_t c = input.deep_samples (x, y, z);
+                    totalsamples += c;
+                    if (c == maxsamples)
+                        ++maxsamples_npixels;
+                    if (c > maxsamples) {
+                        maxsamples = c;
+                        maxsamples_pixel.setValue (x, y, z);
+                        maxsamples_npixels = 1;
+                    }
+                    if (c < minsamples)
+                        minsamples = c;
+                    if (c == 0)
+                        ++emptypixels;
+                    if (depthchannel >= 0) {
+                        for (unsigned int s = 0;  s < c;  ++s) {
+                            float d = input.deep_value (x, y, z, depthchannel, s);
+                            if (d < mindepth) {
+                                mindepth = d;
+                                mindepth_pixel.setValue (x, y, z);
+                            }
+                            if (d > maxdepth) {
+                                maxdepth = d;
+                                maxdepth_pixel.setValue (x, y, z);
+                            }
+                        }
+                    }
+                    sampoffset += c;
+                }
+            }
         }
         printf ("%sMin deep samples in any pixel : %llu\n", indent, (unsigned long long)minsamples);
         printf ("%sMax deep samples in any pixel : %llu\n", indent, (unsigned long long)maxsamples);
+        printf ("%s%llu pixel%s had the max of %llu samples, including (x=%d, y=%d)\n",
+                indent, (unsigned long long)maxsamples_npixels,
+                maxsamples_npixels > 1 ? "s" : "",
+                (unsigned long long)maxsamples,
+                maxsamples_pixel.x, maxsamples_pixel.y);
         printf ("%sAverage deep samples per pixel: %.2f\n", indent, double(totalsamples)/double(npixels));
         printf ("%sTotal deep samples in all pixels: %llu\n", indent, (unsigned long long)totalsamples);
         printf ("%sPixels with deep samples   : %llu\n", indent, (unsigned long long)(npixels-emptypixels));
         printf ("%sPixels with no deep samples: %llu\n", indent, (unsigned long long)emptypixels);
+        printf ("%sMinimum depth was %g at (%d, %d)\n", indent, mindepth,
+                mindepth_pixel.x, mindepth_pixel.y);
+        printf ("%sMaximum depth was %g at (%d, %d)\n", indent, maxdepth,
+                maxdepth_pixel.x, maxdepth_pixel.y);
     } else {
         std::vector<float> constantValues(input.spec().nchannels);
         if (isConstantColor(input, &constantValues[0])) {
@@ -500,7 +537,8 @@ extended_format_name (TypeDesc type, int bits)
 // prints basic info (resolution, width, height, depth, channels, data format,
 // and format name) about given subimage.
 static void
-print_info_subimage (int current_subimage, int max_subimages, ImageSpec &spec,
+print_info_subimage (Oiiotool &ot,
+                     int current_subimage, int max_subimages, ImageSpec &spec,
                      ImageInput *input, const std::string &filename,
                      const print_info_options &opt,
                      boost::regex &field_re, boost::regex &field_exclude_re)
@@ -517,10 +555,17 @@ print_info_subimage (int current_subimage, int max_subimages, ImageSpec &spec,
         printf ("%4d x %4d", spec.width, spec.height);
         if (spec.depth > 1)
             printf (" x %4d", spec.depth);
-        int bits = spec.get_int_attribute ("oiio:BitsPerSample", 0);
         printf (", %d channel, %s%s", spec.nchannels,
-                extended_format_name(spec.format, bits),
-                spec.depth > 1 ? " volume" : "");
+                spec.deep ? "deep " : "",
+                spec.depth > 1 ? "volume " : "");
+        if (spec.channelformats.size()) {
+            for (size_t c = 0;  c < spec.channelformats.size();  ++c)
+                printf ("%s%s", c ? "/" : "",
+                        spec.channelformats[c].c_str());
+        } else {
+            int bits = spec.get_int_attribute ("oiio:BitsPerSample", 0);
+            printf ("%s", extended_format_name(spec.format, bits));
+        }
         printf (" %s", input->format_name());
         printf ("\n");
     }
@@ -553,7 +598,7 @@ print_info_subimage (int current_subimage, int max_subimages, ImageSpec &spec,
     if (opt.dumpdata) {
         ImageSpec tmp;
         input->seek_subimage (current_subimage, 0, tmp);
-        dump_data (input);
+        dump_data (input, opt);
     }
 
     if (opt.compute_stats && (opt.metamatch.empty() ||
@@ -567,7 +612,7 @@ print_info_subimage (int current_subimage, int max_subimages, ImageSpec &spec,
                 printf ("    MIP %d of %d (%d x %d):\n",
                         m, nmip, mipspec.width, mipspec.height);
             }
-            print_stats (filename, spec, current_subimage, m, nmip>1);
+            print_stats (ot, filename, spec, current_subimage, m, nmip>1);
         }
     }
 
@@ -578,7 +623,8 @@ print_info_subimage (int current_subimage, int max_subimages, ImageSpec &spec,
 
 
 bool
-OiioTool::print_info (const std::string &filename, 
+OiioTool::print_info (Oiiotool &ot,
+                      const std::string &filename, 
                       const print_info_options &opt,
                       long long &totalsize,
                       std::string &error)
@@ -649,7 +695,9 @@ OiioTool::print_info (const std::string &filename,
                 spec.width, spec.height);
         if (spec.depth > 1)
             printf (" x %4d", spec.depth);
-        printf (", %d channel, ", spec.nchannels);
+        printf (", %d channel, %s%s", spec.nchannels,
+                spec.deep ? "deep " : "",
+                spec.depth > 1 ? "volume " : "");
         if (spec.channelformats.size()) {
             for (size_t c = 0;  c < spec.channelformats.size();  ++c)
                 printf ("%s%s", c ? "/" : "",
@@ -658,8 +706,6 @@ OiioTool::print_info (const std::string &filename,
             int bits = spec.get_int_attribute ("oiio:BitsPerSample", 0);
             printf ("%s", extended_format_name(spec.format, bits));
         }
-        if (spec.depth > 1)
-            printf (" volume");
         printf (" %s", input->format_name());
         if (opt.sum) {
             imagesize_t imagebytes = spec.image_bytes (true);
@@ -676,6 +722,7 @@ OiioTool::print_info (const std::string &filename,
         printf ("\n");
     }
 
+    int movie = spec.get_int_attribute ("oiio:Movie");
     if (opt.verbose && num_of_subimages != 1) {
         // info about num of subimages and their resolutions
         printf ("    %d subimages: ", num_of_subimages);
@@ -685,6 +732,8 @@ OiioTool::print_info (const std::string &filename,
                 printf ("%dx%dx%d ", spec.width, spec.height, spec.depth);
             else
                 printf ("%dx%d ", spec.width, spec.height);
+            if (movie)
+                break;
         }
         printf ("\n");
     }
@@ -694,7 +743,7 @@ OiioTool::print_info (const std::string &filename,
     if ( ! opt.subimages)
         num_of_subimages = 1;
     for (int i = 0; i < num_of_subimages; ++i) {
-        print_info_subimage (i, num_of_subimages, spec, input,
+        print_info_subimage (ot, i, num_of_subimages, spec, input,
                              filename, opt, field_re, field_exclude_re);
     }
 

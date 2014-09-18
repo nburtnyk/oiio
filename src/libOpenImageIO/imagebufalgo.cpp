@@ -28,33 +28,23 @@
   (This is the Modified BSD License)
 */
 
-/// \file
-/// Implementation of ImageBufAlgo algorithms.
-
 #include <boost/bind.hpp>
 #include <boost/shared_ptr.hpp>
+#include <boost/regex.hpp>
 
 #include <OpenEXR/half.h>
 
 #include <cmath>
-#include <iostream>
-#include <limits>
-#include <stdexcept>
 
-#include "imagebuf.h"
-#include "imagebufalgo.h"
-#include "imagebufalgo_util.h"
-#include "dassert.h"
-#include "sysutil.h"
-#include "filter.h"
-#include "thread.h"
-#include "filesystem.h"
+#include "OpenImageIO/imagebuf.h"
+#include "OpenImageIO/imagebufalgo.h"
+#include "OpenImageIO/imagebufalgo_util.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/platform.h"
+#include "OpenImageIO/filter.h"
+#include "OpenImageIO/thread.h"
 #include "kissfft.hh"
 
-#ifdef USE_FREETYPE
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#endif
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -141,9 +131,13 @@ ImageBufAlgo::IBAprep (ROI &roi, ImageBuf *dst,
                 full_roi = roi_union (full_roi, get_roi_full (B->spec()));
             }
         } else {
-            if (A)
+            if (A) {
                 roi.chend = std::min (roi.chend, A->nchannels());
-            full_roi = roi;
+                if (! (prepflags & IBAprep_NO_COPY_ROI_FULL))
+                    full_roi = A->roi_full();
+            } else {
+                full_roi = roi;
+            }
         }
         // Now we allocate space for dst.  Give it A's spec, but adjust
         // the dimensions to match the ROI.
@@ -175,6 +169,20 @@ ImageBufAlgo::IBAprep (ROI &roi, ImageBuf *dst,
             set_roi_full (spec, full_roi);
         else
             set_roi_full (spec, roi);
+
+        if (prepflags & IBAprep_NO_COPY_METADATA)
+            spec.extra_attribs.clear();
+        else if (! (prepflags & IBAprep_COPY_ALL_METADATA)) {
+            // Since we're altering pixels, be sure that any existing SHA
+            // hash of dst's pixel values is erased.
+            spec.erase_attribute ("oiio:SHA-1");
+            static boost::regex regex_sha ("SHA-1=[[:xdigit:]]*[ ]*");
+            std::string desc = spec.get_string_attribute ("ImageDescription");
+            if (desc.size())
+                spec.attribute ("ImageDescription",
+                                boost::regex_replace (desc, regex_sha, ""));
+        }
+
         dst->alloc (spec);
     }
     if (prepflags & IBAprep_REQUIRE_ALPHA) {
@@ -201,7 +209,14 @@ ImageBufAlgo::IBAprep (ROI &roi, ImageBuf *dst,
             return false;
         }
     }
-
+    if (prepflags & IBAprep_NO_SUPPORT_VOLUME) {
+        if (dst->spec().depth > 1 ||
+                (A && A->spec().depth > 1) ||
+                (B && B->spec().depth > 1)) {
+            dst->error ("volumes not supported");
+            return false;
+        }
+    }
     return true;
 }
 
@@ -234,9 +249,10 @@ ImageBufAlgo::fill (ImageBuf &dst, const float *pixel, ROI roi, int nthreads)
     ASSERT (pixel && "fill must have a non-NULL pixel value pointer");
     if (! IBAprep (roi, &dst))
         return false;
-    OIIO_DISPATCH_TYPES ("fill", fill_, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "fill", fill_, dst.spec().format,
                          dst, pixel, roi, nthreads);
-    return true;
+    return ok;
 }
 
 
@@ -295,365 +311,11 @@ ImageBufAlgo::checker (ImageBuf &dst, int width, int height, int depth,
 {
     if (! IBAprep (roi, &dst))
         return false;
-    OIIO_DISPATCH_TYPES ("checker", checker_, dst.spec().format,
+    bool ok;
+    OIIO_DISPATCH_TYPES (ok, "checker", checker_, dst.spec().format,
                          dst, Dim3(width, height, depth), color1, color2,
                          Dim3(xoffset, yoffset, zoffset), roi, nthreads);
-    return true;
-}
-
-
-
-template<typename DSTTYPE, typename SRCTYPE>
-static bool
-resize_ (ImageBuf &dst, const ImageBuf &src,
-         Filter2D *filter, ROI roi, int nthreads)
-{
-    if (nthreads != 1 && roi.npixels() >= 1000) {
-        // Lots of pixels and request for multi threads? Parallelize.
-        ImageBufAlgo::parallel_image (
-            boost::bind(resize_<DSTTYPE,SRCTYPE>, boost::ref(dst),
-                        boost::cref(src), filter,
-                        _1 /*roi*/, 1 /*nthreads*/),
-            roi, nthreads);
-        return true;
-    }
-
-    // Serial case
-
-    const ImageSpec &srcspec (src.spec());
-    const ImageSpec &dstspec (dst.spec());
-    int nchannels = dstspec.nchannels;
-
-    // Local copies of the source image window, converted to float
-    float srcfx = srcspec.full_x;
-    float srcfy = srcspec.full_y;
-    float srcfw = srcspec.full_width;
-    float srcfh = srcspec.full_height;
-
-    // Ratios of dst/src size.  Values larger than 1 indicate that we
-    // are maximizing (enlarging the image), and thus want to smoothly
-    // interpolate.  Values less than 1 indicate that we are minimizing
-    // (shrinking the image), and thus want to properly filter out the
-    // high frequencies.
-    float xratio = float(dstspec.full_width) / srcfw; // 2 upsize, 0.5 downsize
-    float yratio = float(dstspec.full_height) / srcfh;
-
-    float dstfx = dstspec.full_x;
-    float dstfy = dstspec.full_y;
-    float dstfw = dstspec.full_width;
-    float dstfh = dstspec.full_height;
-    float dstpixelwidth = 1.0f / dstfw;
-    float dstpixelheight = 1.0f / dstfh;
-    float *pel = ALLOCA (float, nchannels);
-    float filterrad = filter->width() / 2.0f;
-
-    // radi,radj is the filter radius, as an integer, in source pixels.  We
-    // will filter the source over [x-radi, x+radi] X [y-radj,y+radj].
-    int radi = (int) ceilf (filterrad/xratio);
-    int radj = (int) ceilf (filterrad/yratio);
-
-    bool separable = filter->separable();
-    float *column = NULL;
-    if (separable) {
-        // Allocate one column for the first horizontal filter pass
-        column = ALLOCA (float, (2 * radj + 1) * nchannels);
-    }
-
-#if 0
-    std::cerr << "Resizing " << srcspec.full_width << "x" << srcspec.full_height
-              << " to " << dstspec.full_width << "x" << dstspec.full_height << "\n";
-    std::cerr << "ratios = " << xratio << ", " << yratio << "\n";
-    std::cerr << "examining src filter support radius of " << radi << " x " << radj << " pixels\n";
-    std::cerr << "dst range " << roi << "\n";
-    std::cerr << "separable filter\n";
-#endif
-
-
-    // We're going to loop over all output pixels we're interested in.
-    //
-    // (s,t) = NDC space coordinates of the output sample we are computing.
-    //     This is the "sample point".
-    // (src_xf, src_xf) = source pixel space float coordinates of the
-    //     sample we're computing. We want to compute the weighted sum
-    //     of all the source image pixels that fall under the filter when
-    //     centered at that location.
-    // (src_x, src_y) = image space integer coordinates of the floor,
-    //     i.e., the closest pixel in the source image.
-    // src_xf_frac and src_yf_frac are the position within that pixel
-    //     of our sample.
-    ImageBuf::Iterator<DSTTYPE> out (dst, roi);
-    for (int y = roi.ybegin;  y < roi.yend;  ++y) {
-        float t = (y-dstfy+0.5f)*dstpixelheight;
-        float src_yf = srcfy + t * srcfh;
-        int src_y;
-        float src_yf_frac = floorfrac (src_yf, &src_y);
-        for (int x = roi.xbegin;  x < roi.xend;  ++x) {
-            float s = (x-dstfx+0.5f)*dstpixelwidth;
-            float src_xf = srcfx + s * srcfw;
-            int src_x;
-            float src_xf_frac = floorfrac (src_xf, &src_x);
-            for (int c = 0;  c < nchannels;  ++c)
-                pel[c] = 0.0f;
-            float totalweight = 0.0f;
-            if (separable) {
-                // First, filter horizontally
-                memset (column, 0, (2*radj+1)*nchannels*sizeof(float));
-                float *p = column;
-                for (int j = -radj;  j <= radj;  ++j, p += nchannels) {
-                    totalweight = 0.0f;
-                    int yy = src_y+j;
-                    ImageBuf::ConstIterator<SRCTYPE> srcpel (src, src_x-radi, src_x+radi+1,
-                                                             yy, yy+1, 0, 1, ImageBuf::WrapClamp);
-                    for (int i = -radi;  i <= radi;  ++i, ++srcpel) {
-                        float w = filter->xfilt (xratio * (i-(src_xf_frac-0.5f)));
-                        totalweight += w;
-                        if (w != 0.0f) {
-                            for (int c = 0;  c < nchannels;  ++c)
-                                p[c] += w * srcpel[c];
-                        }
-                    }
-                    if (totalweight != 0.0f) {
-                        for (int c = 0;  c < nchannels;  ++c)
-                            p[c] /= totalweight;
-                    }
-                }
-                // Now filter vertically
-                totalweight = 0.0f;
-                p = column;
-                for (int j = -radj;  j <= radj;  ++j, p += nchannels) {
-                    float w = filter->yfilt (yratio * (j-(src_yf_frac-0.5f)));
-                    totalweight += w;
-                    for (int c = 0;  c < nchannels;  ++c)
-                        pel[c] += w * p[c];
-                }
-
-            } else {
-                // Non-separable
-                ImageBuf::ConstIterator<SRCTYPE> srcpel (src, src_x-radi, src_x+radi+1,
-                                                       src_y-radi, src_y+radi+1,
-                                                       0, 1, ImageBuf::WrapClamp);
-                for (int j = -radj;  j <= radj;  ++j) {
-                    for (int i = -radi;  i <= radi;  ++i, ++srcpel) {
-                        float w = (*filter)(xratio * (i-(src_xf_frac-0.5f)),
-                                            yratio * (j-(src_yf_frac-0.5f)));
-                        totalweight += w;
-                        if (w == 0.0f)
-                            continue;
-                        DASSERT (! srcpel.done());
-                        for (int c = 0;  c < nchannels;  ++c)
-                            pel[c] += w * srcpel[c];
-                    }
-                }
-                DASSERT (srcpel.done());
-            }
-
-            // Rescale pel to normalize the filter, then write it to the
-            // image.
-            DASSERT (out.x() == x && out.y() == y);
-            if (totalweight == 0.0f) {
-                // zero it out
-                for (int c = 0;  c < nchannels;  ++c)
-                    out[c] = 0.0f;
-            } else {
-                for (int c = 0;  c < nchannels;  ++c)
-                    out[c] = pel[c] / totalweight;
-            }
-            ++out;
-        }
-    }
-
-    return true;
-}
-
-
-
-bool
-ImageBufAlgo::resize (ImageBuf &dst, const ImageBuf &src,
-                      Filter2D *filter, ROI roi, int nthreads)
-{
-    if (! IBAprep (roi, &dst, &src))
-        return false;
-    if (dst.nchannels() != src.nchannels()) {
-        dst.error ("channel number mismatch: %d vs. %d", 
-                   dst.spec().nchannels, src.spec().nchannels);
-        return false;
-    }
-    if (dst.spec().depth > 1 || src.spec().depth > 1) {
-        dst.error ("ImageBufAlgo::resize does not support volume images");
-        return false;
-    }
-
-    // Set up a shared pointer with custom deleter to make sure any
-    // filter we allocate here is properly destroyed.
-    boost::shared_ptr<Filter2D> filterptr ((Filter2D*)NULL, Filter2D::destroy);
-    bool allocfilter = (filter == NULL);
-    if (allocfilter) {
-        // If no filter was provided, punt and just linearly interpolate.
-        const ImageSpec &srcspec (src.spec());
-        const ImageSpec &dstspec (dst.spec());
-        float wratio = float(dstspec.full_width) / float(srcspec.full_width);
-        float hratio = float(dstspec.full_height) / float(srcspec.full_height);
-        float w = 2.0f * std::max (1.0f, wratio);
-        float h = 2.0f * std::max (1.0f, hratio);
-        filter = Filter2D::create ("triangle", w, h);
-        filterptr.reset (filter);
-    }
-
-    OIIO_DISPATCH_TYPES2 ("resize", resize_,
-                          dst.spec().format, src.spec().format,
-                          dst, src, filter, roi, nthreads);
-
-    return false;
-}
-
-
-
-bool
-ImageBufAlgo::resize (ImageBuf &dst, const ImageBuf &src,
-                      const std::string &filtername_, float fwidth,
-                      ROI roi, int nthreads)
-{
-    if (! IBAprep (roi, &dst, &src))
-        return false;
-    const ImageSpec &srcspec (src.spec());
-    const ImageSpec &dstspec (dst.spec());
-    if (dstspec.nchannels != srcspec.nchannels) {
-        dst.error ("channel number mismatch: %d vs. %d", 
-                   dst.spec().nchannels, src.spec().nchannels);
-        return false;
-    }
-    if (dstspec.depth > 1 || srcspec.depth > 1) {
-        dst.error ("ImageBufAlgo::resize does not support volume images");
-        return false;
-    }
-
-    // Resize ratios
-    float wratio = float(dstspec.full_width) / float(srcspec.full_width);
-    float hratio = float(dstspec.full_height) / float(srcspec.full_height);
-
-    // Set up a shared pointer with custom deleter to make sure any
-    // filter we allocate here is properly destroyed.
-    boost::shared_ptr<Filter2D> filter ((Filter2D*)NULL, Filter2D::destroy);
-    std::string filtername = filtername_;
-    if (filtername.empty()) {
-        // No filter name supplied -- pick a good default
-        if (wratio > 1.0f || hratio > 1.0f)
-            filtername = "blackman-harris";
-        else
-            filtername = "lanczos3";
-    }
-    for (int i = 0, e = Filter2D::num_filters();  i < e;  ++i) {
-        FilterDesc fd;
-        Filter2D::get_filterdesc (i, &fd);
-        if (fd.name == filtername) {
-            float w = fwidth > 0.0f ? fwidth : fd.width * std::max (1.0f, wratio);
-            float h = fwidth > 0.0f ? fwidth : fd.width * std::max (1.0f, hratio);
-            filter.reset (Filter2D::create (filtername, w, h));
-            break;
-        }
-    }
-    if (! filter) {
-        dst.error ("Filter \"%s\" not recognized", filtername);
-        return false;
-    }
-
-    OIIO_DISPATCH_TYPES2 ("resize", resize_,
-                          dstspec.format, srcspec.format,
-                          dst, src, filter.get(), roi, nthreads);
-
-    return false;
-}
-
-
-
-template<typename DSTTYPE, typename SRCTYPE>
-static bool
-resample_ (ImageBuf &dst, const ImageBuf &src, bool interpolate,
-           ROI roi, int nthreads)
-{
-    if (nthreads != 1 && roi.npixels() >= 1000) {
-        // Lots of pixels and request for multi threads? Parallelize.
-        ImageBufAlgo::parallel_image (
-            boost::bind(resample_<DSTTYPE,SRCTYPE>, boost::ref(dst),
-                        boost::cref(src), interpolate,
-                        _1 /*roi*/, 1 /*nthreads*/),
-            roi, nthreads);
-        return true;
-    }
-
-    // Serial case
-
-    const ImageSpec &srcspec (src.spec());
-    const ImageSpec &dstspec (dst.spec());
-    int nchannels = src.nchannels();
-
-    // Local copies of the source image window, converted to float
-    float srcfx = srcspec.full_x;
-    float srcfy = srcspec.full_y;
-    float srcfw = srcspec.full_width;
-    float srcfh = srcspec.full_height;
-
-    float dstfx = dstspec.full_x;
-    float dstfy = dstspec.full_y;
-    float dstfw = dstspec.full_width;
-    float dstfh = dstspec.full_height;
-    float dstpixelwidth = 1.0f / dstfw;
-    float dstpixelheight = 1.0f / dstfh;
-    float *pel = ALLOCA (float, nchannels);
-
-    ImageBuf::Iterator<DSTTYPE> out (dst, roi);
-    ImageBuf::ConstIterator<SRCTYPE> srcpel (src);
-    for (int y = roi.ybegin;  y < roi.yend;  ++y) {
-        // s,t are NDC space
-        float t = (y-dstfy+0.5f)*dstpixelheight;
-        // src_xf, src_xf are image space float coordinates
-        float src_yf = srcfy + t * srcfh - 0.5f;
-        // src_x, src_y are image space integer coordinates of the floor
-        int src_y;
-        (void) floorfrac (src_yf, &src_y);
-        for (int x = roi.xbegin;  x < roi.xend;  ++x) {
-            float s = (x-dstfx+0.5f)*dstpixelwidth;
-            float src_xf = srcfx + s * srcfw - 0.5f;
-            int src_x;
-            (void) floorfrac (src_xf, &src_x);
-
-            if (interpolate) {
-                src.interppixel (src_xf, src_yf, pel);
-                for (int c = roi.chbegin; c < roi.chend; ++c)
-                    out[c] = pel[c];
-            } else {
-                srcpel.pos (src_x, src_y, 0);
-                for (int c = roi.chbegin; c < roi.chend; ++c)
-                    out[c] = srcpel[c];
-            }
-            ++out;
-        }
-    }
-
-    return true;
-}
-
-
-
-bool
-ImageBufAlgo::resample (ImageBuf &dst, const ImageBuf &src,
-                        bool interpolate, ROI roi, int nthreads)
-{
-    if (! IBAprep (roi, &dst, &src))
-        return false;
-    if (dst.nchannels() != src.nchannels()) {
-        dst.error ("channel number mismatch: %d vs. %d", 
-                   dst.spec().nchannels, src.spec().nchannels);
-        return false;
-    }
-    if (dst.spec().depth > 1 || src.spec().depth > 1) {
-        dst.error ("ImageBufAlgo::resample does not support volume images");
-        return false;
-    }
-    OIIO_DISPATCH_TYPES2 ("resample", resample_,
-                          dst.spec().format, src.spec().format,
-                          dst, src, interpolate, roi, nthreads);
-    return false;
+    return ok;
 }
 
 
@@ -720,10 +382,11 @@ ImageBufAlgo::convolve (ImageBuf &dst, const ImageBuf &src,
                    dst.spec().nchannels, src.spec().nchannels);
         return false;
     }
-    OIIO_DISPATCH_TYPES2 ("convolve", convolve_,
+    bool ok;
+    OIIO_DISPATCH_TYPES2 (ok, "convolve", convolve_,
                           dst.spec().format, src.spec().format,
                           dst, src, kernel, normalize, roi, nthreads);
-    return false;
+    return ok;
 }
 
 
@@ -738,7 +401,7 @@ inline float binomial (int n, int k)
 
 
 bool
-ImageBufAlgo::make_kernel (ImageBuf &dst, const char *name,
+ImageBufAlgo::make_kernel (ImageBuf &dst, string_view name,
                            float width, float height, float depth,
                            bool normalize)
 {
@@ -767,7 +430,7 @@ ImageBufAlgo::make_kernel (ImageBuf &dst, const char *name,
         for (ImageBuf::Iterator<float> p (dst);  ! p.done();  ++p)
             p[0] = (*filter)((float)p.x(), (float)p.y());
         delete filter;
-    } else if (!strcmp (name, "binomial")) {
+    } else if (name == "binomial") {
         // Binomial filter
         float *wfilter = ALLOCA (float, width);
         for (int i = 0;  i < width;  ++i)
@@ -833,34 +496,31 @@ threshold_to_zero (ImageBuf &dst, float threshold,
 
 bool
 ImageBufAlgo::unsharp_mask (ImageBuf &dst, const ImageBuf &src,
-                            const char *kernel, float width,
+                            string_view kernel, float width,
                             float contrast, float threshold,
                             ROI roi, int nthreads)
 {
-    if (! IBAprep (roi, &dst, &src))
+    if (! IBAprep (roi, &dst, &src,
+            IBAprep_REQUIRE_SAME_NCHANNELS | IBAprep_NO_SUPPORT_VOLUME))
         return false;
-    if (dst.nchannels() != src.nchannels()) {
-        dst.error ("channel number mismatch: %d vs. %d", 
-                   dst.spec().nchannels, src.spec().nchannels);
-        return false;
-    }
-    if (dst.spec().depth > 1 || src.spec().depth > 1) {
-        dst.error ("ImageBufAlgo::unsharp_mask does not support volume images");
-        return false;
-    }
 
     // Blur the source image, store in Blurry
-    ImageBuf K;
-    if (! make_kernel (K, kernel, width, width)) {
-        dst.error ("%s", K.geterror());
-        return false;
-    }
     ImageSpec BlurrySpec = src.spec();
     BlurrySpec.set_format (TypeDesc::FLOAT);  // force float
     ImageBuf Blurry (BlurrySpec);
-    if (! convolve (Blurry, src, K, true, roi, nthreads)) {
-        dst.error ("%s", Blurry.geterror());
-        return false;
+
+    if (kernel == "median") {
+        median_filter (Blurry, src, ceilf(width), 0, roi, nthreads);
+    } else {
+        ImageBuf K;
+        if (! make_kernel (K, kernel, width, width)) {
+            dst.error ("%s", K.geterror());
+            return false;
+        }
+        if (! convolve (Blurry, src, K, true, roi, nthreads)) {
+            dst.error ("%s", Blurry.geterror());
+            return false;
+        }
     }
 
     // Compute the difference between the source image and the blurry
@@ -883,6 +543,81 @@ ImageBufAlgo::unsharp_mask (ImageBuf &dst, const ImageBuf &src,
     // Add the scaled difference to the original, to get the final answer
     ok = add (dst, src, Diff, roi, nthreads);
 
+    return ok;
+}
+
+
+
+template<class Rtype, class Atype>
+static bool
+median_filter_impl (ImageBuf &R, const ImageBuf &A, int width, int height,
+                    ROI roi, int nthreads)
+{
+    if (nthreads != 1 && roi.npixels() >= 1000) {
+        // Possible multiple thread case -- recurse via parallel_image
+        ImageBufAlgo::parallel_image (
+            boost::bind(median_filter_impl<Rtype,Atype>,
+                        boost::ref(R), boost::cref(A),
+                        width, height, _1 /*roi*/, 1 /*nthreads*/),
+            roi, nthreads);
+        return true;
+    }
+
+    if (width < 1)
+        width = 1;
+    if (height < 1)
+        height = width;
+    int w_2 = std::max (1, width/2);
+    int h_2 = std::max (1, height/2);
+    int windowsize = width*height;
+    int nchannels = R.nchannels();
+    float **chans = OIIO_ALLOCA (float*, nchannels);
+    for (int c = 0;  c < nchannels;  ++c)
+        chans[c] = OIIO_ALLOCA (float, windowsize);
+
+    ImageBuf::ConstIterator<Atype> a (A, roi);
+    for (ImageBuf::Iterator<Rtype> r (R, roi);  !r.done();  ++r) {
+        a.rerange (r.x()-w_2, r.x()-w_2+width,
+                   r.y()-h_2, r.y()-h_2+height,
+                   r.z(), r.z()+1, ImageBuf::WrapClamp);
+        int n = 0;
+        for ( ;  ! a.done(); ++a) {
+            if (a.exists()) {
+                for (int c = 0;  c < nchannels;  ++c)
+                    chans[c][n] = a[c];
+                ++n;
+            }
+        }
+        if (n) {
+            int mid = n/2;
+            for (int c = 0;  c < nchannels;  ++c) {
+                std::sort (chans[c]+0, chans[c]+n);
+                r[c] = chans[c][mid];
+            }
+        } else {
+            for (int c = 0;  c < nchannels;  ++c)
+                r[c] = 0.0f;
+        }
+    }
+    return true;
+}
+
+
+
+bool
+ImageBufAlgo::median_filter (ImageBuf &dst, const ImageBuf &src,
+                             int width, int height,
+                             ROI roi, int nthreads)
+{
+    if (! IBAprep (roi, &dst, &src,
+            IBAprep_REQUIRE_SAME_NCHANNELS | IBAprep_NO_SUPPORT_VOLUME))
+        return false;
+
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES2 (ok, "median_filter",
+                                 median_filter_impl, dst.spec().format,
+                                 src.spec().format, dst, src,
+                                 width, height, roi, nthreads);
     return ok;
 }
 
@@ -1053,142 +788,108 @@ ImageBufAlgo::ifft (ImageBuf &dst, const ImageBuf &src,
 
 
 
-#ifdef USE_FREETYPE
-namespace { // anon
-static mutex ft_mutex;
-static FT_Library ft_library = NULL;
-static bool ft_broken = false;
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-const char *default_font_name = "cour";
-#elif defined (__APPLE__)
-const char *default_font_name = "Courier New";
-#elif defined (_WIN32)
-const char *default_font_name = "cour";
-#else
-const char *default_font_name = "cour";
-#endif
-} // anon namespace
-#endif
+template<class Rtype, class Atype>
+static bool
+polar_to_complex_impl (ImageBuf &R, const ImageBuf &A, ROI roi, int nthreads)
+{
+    if (nthreads != 1 && roi.npixels() >= 1000) {
+        // Possible multiple thread case -- recurse via parallel_image
+        ImageBufAlgo::parallel_image (
+            boost::bind(polar_to_complex_impl<Rtype,Atype>, boost::ref(R), boost::cref(A),
+                        _1 /*roi*/, 1 /*nthreads*/),
+            roi, nthreads);
+        return true;
+    }
+
+    ImageBuf::ConstIterator<Atype> a (A, roi);
+    for (ImageBuf::Iterator<Rtype> r (R, roi);  !r.done();  ++r, ++a) {
+        float amp = a[0];
+        float phase = a[1];
+        float sine, cosine;
+        sincos (phase, &sine, &cosine);
+        r[0] = amp * cosine;
+        r[1] = amp * sine;
+    }
+    return true;
+}
+
+
+
+template<class Rtype, class Atype>
+static bool
+complex_to_polar_impl (ImageBuf &R, const ImageBuf &A, ROI roi, int nthreads)
+{
+    if (nthreads != 1 && roi.npixels() >= 1000) {
+        // Possible multiple thread case -- recurse via parallel_image
+        ImageBufAlgo::parallel_image (
+            boost::bind(complex_to_polar_impl<Rtype,Atype>, boost::ref(R), boost::cref(A),
+                        _1 /*roi*/, 1 /*nthreads*/),
+            roi, nthreads);
+        return true;
+    }
+
+    ImageBuf::ConstIterator<Atype> a (A, roi);
+    for (ImageBuf::Iterator<Rtype> r (R, roi);  !r.done();  ++r, ++a) {
+        float real = a[0];
+        float imag = a[1];
+        float phase = std::atan2 (imag, real);
+        if (phase < 0.0f)
+            phase += float (M_TWO_PI);
+        r[0] = hypotf (real, imag);
+        r[1] = phase;
+    }
+    return true;
+}
+
 
 
 bool
-ImageBufAlgo::render_text (ImageBuf &R, int x, int y, const std::string &text,
-                           int fontsize, const std::string &font_,
-                           const float *textcolor)
+ImageBufAlgo::polar_to_complex (ImageBuf &dst, const ImageBuf &src,
+                             ROI roi, int nthreads)
 {
-    if (R.spec().depth > 1) {
-        R.error ("ImageBufAlgo::render_text does not support volume images");
+    if (src.nchannels() != 2) {
+        dst.error ("polar_to_complex can only be done on 2-channel");
         return false;
     }
 
-#ifdef USE_FREETYPE
-    // If we know FT is broken, don't bother trying again
-    if (ft_broken)
+    if (! IBAprep (roi, &dst, &src))
         return false;
-
-    // Thread safety
-    lock_guard ft_lock (ft_mutex);
-    int error = 0;
-
-    // If FT not yet initialized, do it now.
-    if (! ft_library) {
-        error = FT_Init_FreeType (&ft_library);
-        if (error) {
-            ft_broken = true;
-            R.error ("Could not initialize FreeType for font rendering");
-            return false;
-        }
+    if (dst.nchannels() != 2) {
+        dst.error ("polar_to_complex can only be done on 2-channel");
+        return false;
     }
-
-    // A set of likely directories for fonts to live, across several systems.
-    std::vector<std::string> search_dirs;
-    const char *home = getenv ("HOME");
-    if (home && *home) {
-        std::string h (home);
-        search_dirs.push_back (h + "/fonts");
-        search_dirs.push_back (h + "/Fonts");
-        search_dirs.push_back (h + "/Library/Fonts");
-    }
-    const char *systemRoot = getenv ("SystemRoot");
-    if (systemRoot && *systemRoot) {
-        std::string sysroot (systemRoot);
-        search_dirs.push_back (sysroot + "/Fonts");
-    }
-    search_dirs.push_back ("/usr/share/fonts");
-    search_dirs.push_back ("/Library/Fonts");
-    search_dirs.push_back ("C:/Windows/Fonts");
-    search_dirs.push_back ("/opt/local/share/fonts");
-
-    // Try to find the font.  Experiment with several extensions
-    std::string font = font_;
-    if (font.empty())
-        font = default_font_name;
-    if (! Filesystem::is_regular (font)) {
-        // Font specified is not a full path
-        std::string f;
-        static const char *extensions[] = { "", ".ttf", ".pfa", ".pfb", NULL };
-        for (int i = 0;  f.empty() && extensions[i];  ++i)
-            f = Filesystem::searchpath_find (font+extensions[i],
-                                             search_dirs, true, true);
-        if (! f.empty())
-            font = f;
-    }
-
-    FT_Face face;      // handle to face object
-    error = FT_New_Face (ft_library, font.c_str(), 0 /* face index */, &face);
-    if (error) {
-        R.error ("Could not set font face to \"%s\"", font);
-        return false;  // couldn't open the face
-    }
-
-    error = FT_Set_Pixel_Sizes (face,        // handle to face object
-                                0,           // pixel_width
-                                fontsize);   // pixel_heigh
-    if (error) {
-        FT_Done_Face (face);
-        R.error ("Could not set font size to %d", fontsize);
-        return false;  // couldn't set the character size
-    }
-
-    FT_GlyphSlot slot = face->glyph;  // a small shortcut
-    int nchannels = R.spec().nchannels;
-    float *pixelcolor = ALLOCA (float, nchannels);
-    if (! textcolor) {
-        float *localtextcolor = ALLOCA (float, nchannels);
-        for (int c = 0;  c < nchannels;  ++c)
-            localtextcolor[c] = 1.0f;
-        textcolor = localtextcolor;
-    }
-
-    for (size_t n = 0, e = text.size();  n < e;  ++n) {
-        // load glyph image into the slot (erase previous one)
-        error = FT_Load_Char (face, text[n], FT_LOAD_RENDER);
-        if (error)
-            continue;  // ignore errors
-        // now, draw to our target surface
-        for (int j = 0;  j < slot->bitmap.rows; ++j) {
-            int ry = y + j - slot->bitmap_top;
-            for (int i = 0;  i < slot->bitmap.width; ++i) {
-                int rx = x + i + slot->bitmap_left;
-                float b = slot->bitmap.buffer[slot->bitmap.pitch*j+i] / 255.0f;
-                R.getpixel (rx, ry, pixelcolor);
-                for (int c = 0;  c < nchannels;  ++c)
-                    pixelcolor[c] = b*textcolor[c] + (1.0f-b) * pixelcolor[c];
-                R.setpixel (rx, ry, pixelcolor);
-            }
-        }
-        // increment pen position
-        x += slot->advance.x >> 6;
-    }
-
-    FT_Done_Face (face);
-    return true;
-
-#else
-    R.error ("OpenImageIO was not compiled with FreeType for font rendering");
-    return false;   // Font rendering not supported
-#endif
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES2 (ok, "polar_to_complex",
+                                 polar_to_complex_impl, dst.spec().format,
+                                 src.spec().format, dst, src, roi, nthreads);
+    return ok;
 }
+
+
+
+
+bool
+ImageBufAlgo::complex_to_polar (ImageBuf &dst, const ImageBuf &src,
+                             ROI roi, int nthreads)
+{
+    if (src.nchannels() != 2) {
+        dst.error ("complex_to_polar can only be done on 2-channel");
+        return false;
+    }
+
+    if (! IBAprep (roi, &dst, &src))
+        return false;
+    if (dst.nchannels() != 2) {
+        dst.error ("complex_to_polar can only be done on 2-channel");
+        return false;
+    }
+    bool ok;
+    OIIO_DISPATCH_COMMON_TYPES2 (ok, "complex_to_polar",
+                                 complex_to_polar_impl, dst.spec().format,
+                                 src.spec().format, dst, src, roi, nthreads);
+    return ok;
+}
+
 
 
 

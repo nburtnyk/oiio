@@ -77,13 +77,13 @@
 #include <OpenEXR/ImfDeepTiledOutputPart.h>
 #endif
 
-#include "dassert.h"
-#include "imageio.h"
-#include "filesystem.h"
-#include "thread.h"
-#include "strutil.h"
-#include "sysutil.h"
-#include "fmath.h"
+#include "OpenImageIO/dassert.h"
+#include "OpenImageIO/imageio.h"
+#include "OpenImageIO/filesystem.h"
+#include "OpenImageIO/thread.h"
+#include "OpenImageIO/strutil.h"
+#include "OpenImageIO/sysutil.h"
+#include "OpenImageIO/fmath.h"
 
 
 OIIO_PLUGIN_NAMESPACE_BEGIN
@@ -207,8 +207,8 @@ private:
     bool spec_to_header (ImageSpec &spec, int subimage, Imf::Header &header);
 
     // Add a parameter to the output
-    static bool put_parameter (const std::string &name, TypeDesc type,
-                               const void *data, Imf::Header &header);
+    bool put_parameter (const std::string &name, TypeDesc type,
+                        const void *data, Imf::Header &header);
 
     // Decode the IlmImf MIP parameters from the spec.
     static void figure_mip (const ImageSpec &spec, int &nmiplevels,
@@ -238,7 +238,6 @@ OIIO_PLUGIN_EXPORTS_END
 
 
 static std::string format_string ("openexr");
-static std::string format_prefix ("openexr_");
 
 
 namespace pvt {
@@ -299,7 +298,8 @@ OpenEXROutput::supports (const std::string &feature) const
 #endif
 
     // EXR supports random write order iff lineOrder is set to 'random Y'
-    if (feature == "random_access") {
+    // and it's a tiled file.
+    if (feature == "random_access" && m_spec.tile_width != 0) {
         const ImageIOParameter *param = m_spec.find_attribute("openexr:lineOrder");
         const char *lineorder = param ? *(char **)param->data() : NULL;
         return (lineorder && Strutil::iequals (lineorder, "randomY"));
@@ -614,8 +614,13 @@ OpenEXROutput::spec_to_header (ImageSpec &spec, int subimage, Imf::Header &heade
         // is closer to linear or closer to logarithmic.  Compression
         // methods may optimize image quality by adjusting pixel data
         // quantization acording to this hint.
-        
-        bool pLinear = Strutil::iequals (spec.get_string_attribute ("oiio:ColorSpace", "Linear"), "Linear");
+        // Note: This is not the same as data having come from a linear
+        // colorspace.  It is meant for data that is percieved by humans
+        // in a linear fashion.
+        // e.g Cb & Cr components in YCbCr images
+        //     a* & b* components in L*a*b* images
+        //     H & S components in HLS images
+        bool pLinear = false;
 #endif
         m_pixeltype.push_back (ptype);
         if (spec.channelformats.size())
@@ -638,7 +643,7 @@ OpenEXROutput::spec_to_header (ImageSpec &spec, int subimage, Imf::Header &heade
     if (spec.deep)
         spec.attribute ("compression", "zips");
 
-    // Default to increasingY line order, same as EXR.
+    // Default to increasingY line order
     if (! spec.find_attribute("openexr:lineOrder"))
         spec.attribute ("openexr:lineOrder", "increasingY");
 
@@ -757,8 +762,8 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
         xname = "aperture";
     else if (Strutil::iequals(xname, "name"))
         xname = "oiio::subimagename";
-    else if (Strutil::istarts_with (xname, format_prefix))
-        xname = std::string (xname.begin()+format_prefix.size(), xname.end());
+    else if (Strutil::iequals(xname, "openexr:dwaCompressionLevel"))
+        xname = "dwaCompressionLevel";
 
 //    std::cerr << "exr put '" << name << "' -> '" << xname << "'\n";
 
@@ -789,6 +794,13 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
             else if (Strutil::iequals (str, "b44a"))
                 header.compression() = Imf::B44A_COMPRESSION;
 #endif
+#if defined(OPENEXR_VERSION_MAJOR) && \
+    (OPENEXR_VERSION_MAJOR*10000+OPENEXR_VERSION_MINOR*100+OPENEXR_VERSION_PATCH) >= 20200
+            else if (Strutil::iequals (str, "dwaa"))
+                header.compression() = Imf::DWAA_COMPRESSION;
+            else if (Strutil::iequals (str, "dwab"))
+                header.compression() = Imf::DWAB_COMPRESSION;
+#endif
         }
         return true;
     }
@@ -797,7 +809,8 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
         const char *str = *(char **)data;
         header.lineOrder() = Imf::INCREASING_Y;   // Default
         if (str) {
-            if (Strutil::iequals (str, "randomY"))
+            if (Strutil::iequals (str, "randomY")
+                  && m_spec.tile_width /* randomY is only for tiled files */)
                 header.lineOrder() = Imf::RANDOM_Y;
             else if (Strutil::iequals (str, "decreasingY"))
                 header.lineOrder() = Imf::DECREASING_Y;
@@ -844,6 +857,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
     // the library, don't mess it up by inadvertently copying it wrong from
     // the user or from a file we read.
     if (Strutil::iequals(xname, "type") ||
+        Strutil::iequals(xname, "tiles") ||
         Strutil::iequals(xname, "version") ||
         Strutil::iequals(xname, "chunkCount") ||
         Strutil::iequals(xname, "maxSamplesPerPixel")) {
@@ -851,6 +865,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
     }
 
     // General handling of attributes
+    try {
 
     // Scalar
     if (type.arraylen == 0) {
@@ -898,8 +913,8 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                     return true;
                 case TypeDesc::STRING:
                     Imf::StringVector v;
-                    v.push_back(((std::string*)data)[0]);
-                    v.push_back(((std::string*)data)[1]);
+                    v.push_back(((const char **)data)[0]);
+                    v.push_back(((const char **)data)[1]);
                     header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
                     return true;
 #endif
@@ -921,9 +936,9 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                     return true;
                 case TypeDesc::STRING:
                     Imf::StringVector v;
-                    v.push_back(((std::string*)data)[0]);
-                    v.push_back(((std::string*)data)[1]);
-                    v.push_back(((std::string*)data)[2]);
+                    v.push_back(((const char **)data)[0]);
+                    v.push_back(((const char **)data)[1]);
+                    v.push_back(((const char **)data)[2]);
                     header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
                     return true;
 #endif
@@ -977,7 +992,7 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
             }
         }
         // Vec 2
-        else if (type.arraylen == 2 && type.aggregate == TypeDesc::SCALAR) {
+        if (type.arraylen == 2 && type.aggregate == TypeDesc::SCALAR) {
             switch (type.basetype) {
                 case TypeDesc::UINT:
                 case TypeDesc::INT:
@@ -991,17 +1006,11 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::V2dAttribute (*(Imath::V2d*)data));
                     return true;
-                case TypeDesc::STRING:
-                    Imf::StringVector v;
-                    v.push_back(((std::string*)data)[0]);
-                    v.push_back(((std::string*)data)[1]);
-                    header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
-                    return true;
 #endif
             }
         }
         // Vec3
-        else if (type.arraylen == 3 && type.aggregate == TypeDesc::SCALAR) {
+        if (type.arraylen == 3 && type.aggregate == TypeDesc::SCALAR) {
             switch (type.basetype) {
                 case TypeDesc::UINT:
                 case TypeDesc::INT:
@@ -1015,18 +1024,11 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
                 case TypeDesc::DOUBLE:
                     header.insert (xname.c_str(), Imf::V3dAttribute (*(Imath::V3d*)data));
                     return true;
-                case TypeDesc::STRING:
-                    Imf::StringVector v;
-                    v.push_back(((std::string*)data)[0]);
-                    v.push_back(((std::string*)data)[1]);
-                    v.push_back(((std::string*)data)[2]);
-                    header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
-                    return true;
 #endif
             }
         }
         // Matrix
-        else if (type.arraylen == 16 && type.aggregate == TypeDesc::SCALAR) {
+        if (type.arraylen == 16 && type.aggregate == TypeDesc::SCALAR) {
             switch (type.basetype) {
                 case TypeDesc::FLOAT:
                     header.insert (xname.c_str(), Imf::M44fAttribute (*(Imath::M44f*)data));
@@ -1040,17 +1042,21 @@ OpenEXROutput::put_parameter (const std::string &name, TypeDesc type,
         }
 #ifdef USE_OPENEXR_VERSION2
         // String Vector
-        else if (type.basetype == TypeDesc::STRING) {
+        if (type.basetype == TypeDesc::STRING) {
             Imf::StringVector v;
             for (int i=0; i<type.arraylen; i++) {
-                v.push_back(((std::string*)data)[i]);
+                v.push_back(((const char **)data)[i]);
             }
             header.insert (xname.c_str(), Imf::StringVectorAttribute (v));
             return true;
         }
 #endif
     }
-
+    } catch (const std::exception &e) {
+#ifndef NDEBUG
+        std::cout << "Caught OpenEXR exception: " << e.what() << "\n";
+#endif
+    }
 
 #ifndef NDEBUG
     std::cerr << "Don't know what to do with " << type.c_str() << ' ' << xname << "\n";
