@@ -34,6 +34,15 @@
 #include <OpenEXR/half.h>
 #include <OpenEXR/ImathFun.h>
 
+//////////////////////////////////////////////////////////////////////////
+// Redshift
+#if defined(_MSC_VER)
+#include <boost/locale.hpp>
+#include <boost/filesystem/path.hpp>
+#include <boost/filesystem/fstream.hpp>
+#endif //defined(_MSC_VER)
+//////////////////////////////////////////////////////////////////////////
+
 #include <boost/scoped_array.hpp>
 
 #include "dassert.h"
@@ -46,6 +55,7 @@
 #include "imageio_pvt.h"
 
 #include <OpenEXR/ImfThreading.h>
+
 
 OIIO_NAMESPACE_ENTER
 {
@@ -699,14 +709,31 @@ copy_image (int nchannels, int width, int height, int depth,
     return true;
 }
 
-int shutdown_exr_threads ()
+//////////////////////////////////////////////////////////////////////////
+// Redshift
+#if defined(_MSC_VER)
+std::locale old_locale; 
+
+void redshift_init ()
 {
-	int ret = Imf::globalThreadCount();
-	Imf::setGlobalThreadCount(0);
-	return ret;
+	//imbue a utf8 locale (so that narrow to wide string conversion in boost::filesystem happens as UTF8 -> UTF16
+	old_locale = boost::filesystem::path::imbue(boost::locale::generator().generate(""));
 }
 
+void redshift_shutdown ()
+{
+	//shutdown exr threads
+	int ret = Imf::globalThreadCount();
+	Imf::setGlobalThreadCount(0);
 
+	//restore original imbued locale
+	boost::filesystem::path::imbue(old_locale);
+}
+#else //defined(_MSC_VER)
+void redshift_init () {}
+void redshift_shutdown () {}
+#endif //defined(_MSC_VER)
+//////////////////////////////////////////////////////////////////////////
 
 void
 DeepData::init (int npix, int nchan,
