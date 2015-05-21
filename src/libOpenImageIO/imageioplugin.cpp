@@ -290,7 +290,11 @@ catalog_builtin_plugins ()
 #ifdef USE_WEBP
     DECLAREPLUG (webp);
 #endif
+
+#if 0
     DECLAREPLUG (zfile);
+#endif
+
 #endif
 }
 
